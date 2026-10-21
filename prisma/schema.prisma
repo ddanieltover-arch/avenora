@@ -1,0 +1,736 @@
+// Avenora Financial Platform Database Schema
+// Database: PostgreSQL (Neon / Managed PostgreSQL)
+// Designed for strict double-entry accounting, customer identity, multicurrency wallets, loans, grants, and card services.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// -----------------------------------------------------------------------------
+// ENUMS & TYPES
+// -----------------------------------------------------------------------------
+
+enum UserRole {
+  CUSTOMER
+  SUPPORT
+  COMPLIANCE_REVIEWER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  LOCKED
+  PENDING_VERIFICATION
+}
+
+enum KycStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  NEEDS_MORE_INFORMATION
+}
+
+enum LoanApplicationType {
+  PERSONAL
+  SMALL_BUSINESS
+}
+
+enum LoanApplicationStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  NEEDS_MORE_INFORMATION
+  APPROVED_FOR_DEMO
+  DECLINED_FOR_DEMO
+  CANCELLED
+}
+
+enum LoanRiskCategory {
+  LOW_RISK_DEMO
+  MODERATE_RISK_DEMO
+  ELEVATED_RISK_DEMO
+}
+
+enum LoanRecommendation {
+  RECOMMEND_DEMO_APPROVAL
+  REQUIRES_MANUAL_REVIEW
+  DECLINE_DEMO
+}
+
+enum GrantProgramStatus {
+  UNVERIFIED
+  PENDING_REVIEW
+  VERIFIED
+  REJECTED
+  EXPIRED
+}
+
+enum GrantApplicationStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  NEEDS_MORE_INFORMATION
+  ELIGIBLE_FOR_REVIEW
+  INELIGIBLE
+  APPROVED_FOR_DEMO
+  DECLINED
+  CANCELLED
+}
+
+enum DisbursementStatus {
+  PENDING_SIMULATION
+  DISBURSED_SIMULATED
+  FAILED
+}
+
+enum CardType {
+  DEBIT
+  CREDIT
+}
+
+enum CardForm {
+  VIRTUAL
+  PHYSICAL
+}
+
+enum CardStatus {
+  REQUESTED
+  PENDING_REVIEW
+  APPROVED_FOR_DEMO
+  ACTIVE_SIMULATED
+  FROZEN
+  TERMINATED
+  EXPIRED
+}
+
+enum HoldStatus {
+  PENDING_HOLD
+  SETTLED_SIMULATED
+  REVERSED
+  EXPIRED_RELEASED
+}
+
+enum AccountType {
+  ASSET       // e.g. Customer deposits held at safeguarding banks, crypto in custody vault
+  LIABILITY   // e.g. Customer wallet available balance (company liability to user)
+  EQUITY      // e.g. Capital reserves, retained earnings
+  REVENUE     // e.g. Foreign exchange fee income, interchange revenue
+  EXPENSE     // e.g. Provider processing fees, custody network fees
+}
+
+enum AccountClassification {
+  SYSTEM_SAFEGUARDING_ASSET
+  SYSTEM_FEE_REVENUE
+  SYSTEM_PROVIDER_CLEARING
+  CUSTOMER_AVAILABLE_BALANCE
+  CUSTOMER_PENDING_HOLD
+  CUSTOMER_RESERVED_BALANCE
+}
+
+enum TransactionStatus {
+  DRAFT       // Created, waiting for authorization/validation
+  PENDING     // Submitted to provider / awaiting settlement
+  POSTED      // Settled and posted immutably to ledger
+  VOIDED      // Cancelled before posting
+  REJECTED    // Failed risk check or provider declination
+  REVERSED    // Compensated by an auditable reversal journal entry
+}
+
+enum LedgerEntryDirection {
+  DEBIT
+  CREDIT
+}
+
+enum AuditAction {
+  USER_REGISTERED
+  USER_LOGIN
+  USER_LOGOUT
+  PASSWORD_RESET_REQUESTED
+  PASSWORD_RESET_COMPLETED
+  MFA_ENROLLED
+  MFA_VERIFIED
+  KYC_SUBMITTED
+  KYC_REVIEWED
+  WALLET_CREATED
+  SIMULATED_DEPOSIT
+  SIMULATED_WITHDRAWAL
+  INTERNAL_TRANSFER
+  FX_CONVERTED
+  WEBHOOK_PROCESSED
+  LIMIT_OVERRIDE
+  JOURNAL_POSTED
+  ACCOUNT_FROZEN
+  CONFIG_CHANGED
+  LOAN_APPLICATION_SUBMITTED
+  LOAN_APPLICATION_REVIEWED
+  GRANT_PROGRAM_VERIFIED
+  GRANT_APPLICATION_SUBMITTED
+  GRANT_AWARD_DISBURSED
+  CARD_REQUESTED
+  CARD_STATUS_CHANGED
+  CARD_HOLD_AUTHORIZED
+  CARD_HOLD_RELEASED
+  USER_STATUS_CHANGED
+  USER_ROLE_CHANGED
+  TRANSACTION_REVERSED
+  ADMIN_ACCESS_DENIED
+  DOMESTIC_ACCOUNT_GENERATED
+}
+
+enum DomesticAccountGenerationStatus {
+  NOT_ELIGIBLE
+  PENDING_GENERATION
+  GENERATED
+  GENERATION_FAILED
+  FORMAT_NOT_IMPLEMENTED
+  COUNTRY_MISMATCH_REQUIRES_REVIEW
+}
+
+// -----------------------------------------------------------------------------
+// IDENTITY, AUTHENTICATION & KYC MODELS
+// -----------------------------------------------------------------------------
+
+model User {
+  id                  String               @id @default(uuid())
+  email               String               @unique
+  passwordHash        String
+  fullName            String
+  countryCode         String               @default("US") @db.VarChar(2)
+  role                UserRole             @default(CUSTOMER)
+  status              UserStatus           @default(ACTIVE)
+  kycStatus           KycStatus            @default(NOT_STARTED)
+  mfaEnabled          Boolean              @default(false)
+  mfaSecret           String?
+  mfaRecoveryCodes    String?              // JSON array
+  failedLoginAttempts Int                  @default(0)
+  lockedUntil         DateTime?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  sessions            Session[]
+  passwordResetTokens PasswordResetToken[]
+  kycProfile          KycProfile?
+  domesticBankAccount CustomerDomesticBankAccount?
+  wallets             Wallet[]
+  fxQuotes            FxQuote[]
+  loanApplications    LoanApplication[]
+  grantApplications   GrantApplication[]
+  paymentCards        PaymentCard[]
+  auditLogs           AuditLog[]
+
+  @@index([email])
+  @@index([role])
+  @@index([kycStatus])
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  tokenHash String   @unique
+  ipAddress String?
+  userAgent String?
+  isRevoked Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model PasswordResetToken {
+  id        String   @id @default(uuid())
+  userId    String
+  tokenHash String   @unique
+  isUsed    Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@map("password_reset_tokens")
+}
+
+model KycProfile {
+  id                 String    @id @default(uuid())
+  userId             String    @unique
+  tier               Int       @default(1)
+  status             KycStatus @default(NOT_STARTED)
+  legalFirstName     String?
+  legalLastName      String?
+  dateOfBirth        String?
+  taxIdType          String?
+  taxIdMasked        String?
+  residentialAddress String?   @db.Text
+  documentRefs       String    @default("[]") @db.Text
+  submittedAt        DateTime?
+  reviewedAt         DateTime?
+  reviewerUserId     String?
+  reviewerNotes      String?   @db.Text
+  rejectionReason    String?
+  reviewHistory      String    @default("[]") @db.Text
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("kyc_profiles")
+}
+
+model CustomerDomesticBankAccount {
+  id                    String                          @id @default(uuid())
+  userId                String                          @unique
+  verifiedCountryCode   String                          @db.VarChar(2)
+  schemeId              String                          @db.VarChar(64)
+  generationStatus      DomesticAccountGenerationStatus @default(NOT_ELIGIBLE)
+  identifierType        String                          @default("BANK_ACCOUNT") @db.VarChar(32)
+  formattedValue        String?                         @db.Text
+  rawValue              String?                         @unique
+  maskedValue           String?                         @db.Text
+  componentsJson        String                          @default("{}") @db.Text
+  isSimulated           Boolean                         @default(true)
+  generationSource      String                          @default("SYNTHETIC_GENERATOR") @db.VarChar(32)
+  disclaimer            String                          @db.Text
+  formatVersion         String                          @default("1.0.0") @db.VarChar(16)
+  ruleSourceVersion     String                          @db.VarChar(32)
+  kycProfileId          String?
+  kycApprovalReference  String?
+  generatedAt           DateTime?
+  lastError             String?                         @db.Text
+  createdAt             DateTime                        @default(now())
+  updatedAt             DateTime                        @updatedAt
+
+  user                  User                            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([verifiedCountryCode])
+  @@index([generationStatus])
+  @@map("customer_domestic_bank_accounts")
+}
+
+// -----------------------------------------------------------------------------
+// MULTICURRENCY WALLET MODELS
+// -----------------------------------------------------------------------------
+
+model Wallet {
+  id        String          @id @default(uuid())
+  userId    String
+  name      String
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accounts  WalletAccount[]
+
+  @@index([userId])
+  @@map("wallets")
+}
+
+model WalletAccount {
+  id              String        @id @default(uuid())
+  walletId        String
+  currency        String        @db.VarChar(6)
+  ledgerAccountId String        @unique
+  status          String        @default("ACTIVE")
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  wallet          Wallet        @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  ledgerAccount   LedgerAccount @relation(fields: [ledgerAccountId], references: [id], onDelete: Restrict)
+  paymentCards    PaymentCard[]
+
+  @@unique([walletId, currency])
+  @@index([walletId])
+  @@index([currency])
+  @@map("wallet_accounts")
+}
+
+model FxQuote {
+  id                     String   @id @default(uuid())
+  userId                 String
+  sourceCurrency         String   @db.VarChar(6)
+  destinationCurrency    String   @db.VarChar(6)
+  sourceAmountMinor      BigInt
+  destinationAmountMinor BigInt
+  exchangeRate           String
+  feeMinor               BigInt   @default(0)
+  rateSource             String   @default("SIMULATED_REFERENCE_RATE")
+  expiresAt              DateTime
+  isExecuted             Boolean  @default(false)
+  createdAt              DateTime @default(now())
+
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("fx_quotes")
+}
+
+// -----------------------------------------------------------------------------
+// LOAN AND CREDIT MODELS (Phase 03)
+// -----------------------------------------------------------------------------
+
+model LoanApplication {
+  id                            String                @id @default(uuid())
+  userId                        String
+  type                          LoanApplicationType   @default(PERSONAL)
+  currency                      String                @db.VarChar(6)
+  requestedAmountMinor          BigInt
+  termMonths                    Int
+  purpose                       String
+  applicantIncomeAnnualMinor    BigInt
+  applicantExpensesMonthlyMinor BigInt
+  businessName                  String?
+  businessRevenueAnnualMinor    BigInt?
+  status                        LoanApplicationStatus @default(DRAFT)
+  consentAcknowledged           Boolean               @default(false)
+  reviewerUserId                String?
+  reviewerNotes                 String?               @db.Text
+  reasonCode                    String?
+  reviewHistory                 String                @default("[]") @db.Text
+  submittedAt                   DateTime?
+  reviewedAt                    DateTime?
+  createdAt                     DateTime              @default(now())
+  updatedAt                     DateTime              @updatedAt
+
+  user                          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assessment                    LoanAssessment?
+
+  @@index([userId])
+  @@index([status])
+  @@map("loan_applications")
+}
+
+model LoanAssessment {
+  id                 String             @id @default(uuid())
+  applicationId      String             @unique
+  riskCategory       LoanRiskCategory
+  recommendation     LoanRecommendation
+  syntheticScore     Int
+  debtToIncomeRatio  String
+  rulesetVersion     String             @default("v1.2.0-demo")
+  factorsExplanation String             @default("[]") @db.Text
+  assessedAt         DateTime           @default(now())
+
+  application        LoanApplication    @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@map("loan_assessments")
+}
+
+// -----------------------------------------------------------------------------
+// GRANT PROGRAM MODELS (Phase 03)
+// -----------------------------------------------------------------------------
+
+model GrantProgram {
+  id                  String             @id @default(uuid())
+  name                String
+  description         String             @db.Text
+  organizationName    String
+  fundingSourceRef    String
+  verificationStatus  GrantProgramStatus @default(PENDING_REVIEW)
+  eligibleCountries   String             @default("[\"US\"]") @db.Text
+  fundingMinMinor     BigInt
+  fundingMaxMinor     BigInt
+  currency            String             @db.VarChar(6)
+  openingDate         DateTime
+  closingDate         DateTime
+  eligibilityCriteria String             @default("[]") @db.Text
+  verifiedByUserId    String?
+  verifiedAt          DateTime?
+  isPublished         Boolean            @default(true)
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  applications        GrantApplication[]
+
+  @@index([verificationStatus])
+  @@map("grant_programs")
+}
+
+model GrantApplication {
+  id                   String                 @id @default(uuid())
+  programId            String
+  userId               String
+  projectTitle         String
+  projectSummary       String                 @db.Text
+  requestedAmountMinor BigInt
+  currency             String                 @db.VarChar(6)
+  status               GrantApplicationStatus @default(DRAFT)
+  eligibilityAnswers   String                 @default("{}") @db.Text
+  documentRefs         String                 @default("[]") @db.Text
+  reviewerUserId       String?
+  reviewerNotes        String?                @db.Text
+  submittedAt          DateTime?
+  reviewedAt           DateTime?
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+
+  program              GrantProgram           @relation(fields: [programId], references: [id], onDelete: Restrict)
+  user                 User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  award                GrantAward?
+
+  @@index([programId])
+  @@index([userId])
+  @@index([status])
+  @@map("grant_applications")
+}
+
+model GrantAward {
+  id                 String             @id @default(uuid())
+  applicationId      String             @unique
+  awardedAmountMinor BigInt
+  currency           String             @db.VarChar(6)
+  reconciliationRef  String             @unique
+  approvedByUserId   String
+  disbursementStatus DisbursementStatus @default(PENDING_SIMULATION)
+  disbursedAt        DateTime?
+  idempotencyKey     String             @unique
+  createdAt          DateTime           @default(now())
+
+  application        GrantApplication   @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@map("grant_awards")
+}
+
+// -----------------------------------------------------------------------------
+// CARD SERVICES MODELS (Phase 03)
+// -----------------------------------------------------------------------------
+
+model PaymentCard {
+  id                      String              @id @default(uuid())
+  userId                  String
+  walletAccountId         String
+  type                    CardType            @default(DEBIT)
+  form                    CardForm            @default(VIRTUAL)
+  status                  CardStatus          @default(ACTIVE_SIMULATED)
+  currency                String              @db.VarChar(6)
+  maskedPan               String
+  syntheticCardholderName String
+  syntheticExpiry         String
+  dailySpendLimitMinor    BigInt              @default(100000)
+  singleTxLimitMinor      BigInt              @default(50000)
+  providerRef             String
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
+
+  user                    User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  walletAccount           WalletAccount       @relation(fields: [walletAccountId], references: [id], onDelete: Restrict)
+  authorizations          CardAuthorization[]
+  stateEvents             CardStateEvent[]
+
+  @@index([userId])
+  @@index([status])
+  @@map("payment_cards")
+}
+
+model CardStateEvent {
+  id             String      @id @default(uuid())
+  cardId         String
+  previousStatus CardStatus
+  newStatus      CardStatus
+  reason         String?
+  actorUserId    String
+  createdAt      DateTime    @default(now())
+
+  card           PaymentCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@index([cardId])
+  @@map("card_state_events")
+}
+
+model CardAuthorization {
+  id                     String      @id @default(uuid())
+  cardId                 String
+  merchantName           String
+  mcc                    String      @default("5411") @db.VarChar(4)
+  currency               String      @db.VarChar(6)
+  amountMinor            BigInt
+  holdStatus             HoldStatus  @default(PENDING_HOLD)
+  authCode               String
+  ledgerJournalEntryId   String?
+  reversalJournalEntryId String?
+  expiresAt              DateTime
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+
+  card                   PaymentCard @relation(fields: [cardId], references: [id], onDelete: Restrict)
+
+  @@index([cardId])
+  @@index([holdStatus])
+  @@map("card_authorizations")
+}
+
+// -----------------------------------------------------------------------------
+// CORE FINANCIAL LEDGER MODELS (Phase 01)
+// -----------------------------------------------------------------------------
+
+model LedgerAccount {
+  id              String                @id @default(uuid())
+  accountNumber   String                @unique
+  name            String
+  type            AccountType
+  classification  AccountClassification
+  currency        String                @db.VarChar(6)
+  userId          String?
+  isActive        Boolean               @default(true)
+  isFrozen        Boolean               @default(false)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  lines           LedgerEntryLine[]
+  walletAccount   WalletAccount?
+
+  @@index([userId])
+  @@index([currency])
+  @@index([type])
+  @@map("ledger_accounts")
+}
+
+model FinancialTransaction {
+  id              String            @id @default(uuid())
+  referenceNumber String            @unique
+  idempotencyKey  String?           @unique
+  description     String
+  status          TransactionStatus @default(DRAFT)
+  originCountry   String            @db.VarChar(2)
+  sourceType      String
+  providerCode    String?
+  providerTxId    String?
+  settledAt       DateTime?
+  postedAt        DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  journalEntries  JournalEntry[]
+  auditLogs       AuditLog[]
+
+  @@index([status])
+  @@index([providerTxId])
+  @@map("financial_transactions")
+}
+
+model JournalEntry {
+  id              String                @id @default(uuid())
+  transactionId   String
+  entrySequence   Int
+  currency        String                @db.VarChar(6)
+  narration       String
+  postedAt        DateTime              @default(now())
+  
+  transaction     FinancialTransaction  @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  lines           LedgerEntryLine[]
+
+  @@unique([transactionId, entrySequence])
+  @@map("journal_entries")
+}
+
+model LedgerEntryLine {
+  id              String               @id @default(uuid())
+  journalEntryId  String
+  accountId       String
+  direction       LedgerEntryDirection
+  amountMinor     BigInt
+  description     String?
+  createdAt       DateTime             @default(now())
+
+  journalEntry    JournalEntry         @relation(fields: [journalEntryId], references: [id], onDelete: Restrict)
+  account         LedgerAccount        @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@index([accountId])
+  @@index([journalEntryId])
+  @@map("ledger_entry_lines")
+}
+
+// -----------------------------------------------------------------------------
+// IDEMPOTENCY, AUDIT & WEBHOOKS
+// -----------------------------------------------------------------------------
+
+model IdempotencyRecord {
+  key             String    @id
+  userId          String?
+  endpoint        String
+  requestHash     String
+  responseCode    Int
+  responseBody    String    @db.Text
+  createdAt       DateTime  @default(now())
+  expiresAt       DateTime
+
+  @@index([expiresAt])
+  @@map("idempotency_records")
+}
+
+model AuditLog {
+  id              String                @id @default(uuid())
+  action          AuditAction
+  actorUserId     String?
+  actorRole       String                @default("SYSTEM")
+  ipAddress       String?
+  userAgent       String?
+  resourceType    String
+  resourceId      String?
+  previousState   String?               @db.Text
+  newState        String?               @db.Text
+  reason          String?               @db.Text
+  correlationId   String?
+  details         String?               @db.Text
+  financialTxId   String?
+  createdAt       DateTime              @default(now())
+
+  transaction     FinancialTransaction? @relation(fields: [financialTxId], references: [id], onDelete: SetNull)
+  user            User?                 @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([action])
+  @@index([actorUserId])
+  @@index([actorRole])
+  @@index([resourceType])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model MockWebhookEvent {
+  id              String    @id @default(uuid())
+  eventId         String    @unique
+  eventType       String
+  payloadHash     String
+  signatureHeader String
+  status          String    @default("RECEIVED")
+  processingLog   String?   @db.Text
+  receivedAt      DateTime  @default(now())
+  processedAt     DateTime?
+
+  @@index([eventId])
+  @@index([eventType])
+  @@index([receivedAt])
+  @@map("mock_webhook_events")
+}
+
+model SupportedCurrency {
+  code            String    @id @db.VarChar(6)
+  name            String
+  symbol          String    @db.VarChar(5)
+  minorUnits      Int
+  isActive        Boolean   @default(true)
+  isCrypto        Boolean   @default(false)
+  minDepositMinor BigInt    @default(100)
+  maxDailyMinor   BigInt    @default(5000000)
+
+  @@map("supported_currencies")
+}

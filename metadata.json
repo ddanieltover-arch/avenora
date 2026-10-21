@@ -1,0 +1,8 @@
+{
+  "name": "Remix Remix Remix Remix Avenora Fintech Platform",
+  "description": "Production-oriented financial platform foundation for Avenora featuring immutable double-entry ledger architecture, strict validation, zero-float monetary math, and security guardrails.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

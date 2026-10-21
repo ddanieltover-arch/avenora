@@ -1,0 +1,366 @@
+/**
+ * @license Apache-2.0
+ * Avenora Fintech Platform — Frontend Authentication Context
+ */
+
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  ReactNode,
+} from 'react';
+import { buildPortalPath, navigateToPath } from '../routing/appRoutes.ts';
+
+function redirectToPortalDashboard(): void {
+  navigateToPath(buildPortalPath('overview'), { replace: true });
+  window.dispatchEvent(new PopStateEvent('popstate'));
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  fullName: string;
+  phoneNumber: string;
+  countryCode: string;
+  role: 'CUSTOMER' | 'SUPPORT' | 'COMPLIANCE_REVIEWER' | 'ADMIN' | 'SUPER_ADMIN';
+  status: 'ACTIVE' | 'SUSPENDED' | 'LOCKED' | 'PENDING_VERIFICATION';
+  kycStatus: 'NOT_STARTED' | 'IN_PROGRESS' | 'SUBMITTED' | 'UNDER_REVIEW' | 'APPROVED' | 'REJECTED' | 'NEEDS_MORE_INFORMATION';
+  mfaEnabled: boolean;
+}
+
+interface AuthContextType {
+  user: AuthUser | null;
+  token: string | null;
+  loading: boolean;
+  authModalOpen: boolean;
+  authModalTab: 'login' | 'register' | 'forgot' | 'reset';
+  accountOpeningWelcomeOpen: boolean;
+  openAuthModal: (tab?: 'login' | 'register' | 'forgot' | 'reset') => void;
+  openAccountOpeningFlow: () => void;
+  closeAuthModal: () => void;
+  dismissAccountOpeningWelcome: () => void;
+  proceedToRegistrationFromWelcome: () => void;
+  login: (email: string, password: string, totpCode?: string) => Promise<{ requiresMfa: boolean }>;
+  logout: () => Promise<void>;
+  register: (
+    email: string,
+    password: string,
+    fullName: string,
+    phoneNumber: string,
+    transactionPin: string,
+    countryCode: string,
+  ) => Promise<void>;
+  refreshUser: () => Promise<void>;
+  startMfa: () => Promise<{ secret: string; otpauthUri: string }>;
+  confirmMfa: (secret: string, code: string) => Promise<{ recoveryCodes: string[] }>;
+  requestPasswordReset: (email: string) => Promise<{ debugToken?: string; message: string }>;
+  confirmPasswordReset: (token: string, newPassword: string) => Promise<void>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
+}
+
+const AuthContext = createContext<AuthContextType | null>(null);
+
+const SESSION_TOKEN_STORAGE_KEY = 'avenora_session_token';
+
+function persistSessionToken(sessionToken: string | null) {
+  if (sessionToken) {
+    sessionStorage.setItem(SESSION_TOKEN_STORAGE_KEY, sessionToken);
+  } else {
+    sessionStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
+  }
+}
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authModalTab, setAuthModalTab] = useState<'login' | 'register' | 'forgot' | 'reset'>('login');
+  const [accountOpeningWelcomeOpen, setAccountOpeningWelcomeOpen] = useState(false);
+  const welcomeHistoryPushedRef = useRef(false);
+  const accountOpeningFlowLockRef = useRef(false);
+
+  const openAuthModal = (tab: 'login' | 'register' | 'forgot' | 'reset' = 'login') => {
+    setAuthModalTab(tab);
+    setAuthModalOpen(true);
+  };
+
+  const openAccountOpeningFlow = useCallback(() => {
+    if (accountOpeningWelcomeOpen || accountOpeningFlowLockRef.current) return;
+    accountOpeningFlowLockRef.current = true;
+    setAuthModalOpen(false);
+    setAccountOpeningWelcomeOpen(true);
+    if (!welcomeHistoryPushedRef.current) {
+      window.history.pushState({ avenoraAccountWelcome: true }, '');
+      welcomeHistoryPushedRef.current = true;
+    }
+    window.setTimeout(() => {
+      accountOpeningFlowLockRef.current = false;
+    }, 300);
+  }, [accountOpeningWelcomeOpen]);
+
+  const dismissAccountOpeningWelcome = useCallback(() => {
+    setAccountOpeningWelcomeOpen(false);
+    if (welcomeHistoryPushedRef.current) {
+      welcomeHistoryPushedRef.current = false;
+      window.history.back();
+    }
+  }, []);
+
+  const proceedToRegistrationFromWelcome = useCallback(() => {
+    setAccountOpeningWelcomeOpen(false);
+    if (welcomeHistoryPushedRef.current) {
+      welcomeHistoryPushedRef.current = false;
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+    setAuthModalTab('register');
+    setAuthModalOpen(true);
+  }, []);
+
+  const closeAuthModal = () => {
+    setAuthModalOpen(false);
+  };
+
+  useEffect(() => {
+    const onPopState = () => {
+      if (accountOpeningWelcomeOpen) {
+        welcomeHistoryPushedRef.current = false;
+        setAccountOpeningWelcomeOpen(false);
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [accountOpeningWelcomeOpen]);
+
+  useEffect(() => {
+    const restoreSession = async () => {
+      const savedToken = sessionStorage.getItem(SESSION_TOKEN_STORAGE_KEY);
+      if (!savedToken) {
+        setLoading(false);
+        return;
+      }
+
+      setToken(savedToken);
+      try {
+        const res = await fetch('/api/v1/auth/me', {
+          headers: { Authorization: `Bearer ${savedToken}` },
+        });
+        const data = await res.json();
+        if (res.ok && data.user) {
+          setUser(data.user);
+        } else {
+          persistSessionToken(null);
+          setToken(null);
+        }
+      } catch (err) {
+        console.error('Failed to restore session', err);
+        persistSessionToken(null);
+        setToken(null);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    restoreSession();
+  }, []);
+
+  const login = async (email: string, password: string, totpCode?: string) => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/v1/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, totpCode }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || data.title || 'Login failed');
+      }
+      if (data.status === 'mfa_required') {
+        return { requiresMfa: true };
+      }
+      setUser(data.user);
+      setToken(data.sessionToken);
+      persistSessionToken(data.sessionToken);
+      setAuthModalOpen(false);
+      redirectToPortalDashboard();
+      return { requiresMfa: false };
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const logout = async () => {
+    try {
+      if (token) {
+        await fetch('/api/v1/auth/logout', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      }
+    } catch {
+      // Ignore network errors on logout
+    } finally {
+      setUser(null);
+      setToken(null);
+      persistSessionToken(null);
+      navigateToPath('/', { replace: true });
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const register = async (
+    email: string,
+    password: string,
+    fullName: string,
+    phoneNumber: string,
+    transactionPin: string,
+    countryCode: string,
+  ) => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/v1/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          password,
+          fullName,
+          phoneNumber,
+          transactionPin,
+          countryCode,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || data.title || 'Registration failed');
+      }
+      setUser(data.user);
+      setToken(data.sessionToken);
+      persistSessionToken(data.sessionToken);
+      setAuthModalOpen(false);
+      redirectToPortalDashboard();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const refreshUser = async () => {
+    if (!token) return;
+    try {
+      const res = await fetch('/api/v1/auth/me', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (res.ok && data.user) {
+        setUser(data.user);
+      }
+    } catch (err) {
+      console.error('Failed to refresh user profile', err);
+    }
+  };
+
+  const startMfa = async (): Promise<{ secret: string; otpauthUri: string }> => {
+    if (!token) throw new Error('Not authenticated');
+    const res = await fetch('/api/v1/auth/mfa/enroll', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || data.title || 'MFA enrollment initialization failed');
+    return { secret: data.secret, otpauthUri: data.otpauthUri };
+  };
+
+  const confirmMfa = async (secret: string, code: string): Promise<{ recoveryCodes: string[] }> => {
+    if (!token) throw new Error('Not authenticated');
+    const res = await fetch('/api/v1/auth/mfa/confirm', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ secret, code }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || data.title || 'MFA confirmation failed');
+    await refreshUser();
+    return { recoveryCodes: data.recoveryCodes || [] };
+  };
+
+  const requestPasswordReset = async (email: string): Promise<{ debugToken?: string; message: string }> => {
+    const res = await fetch('/api/v1/auth/password-reset/request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || data.title || 'Failed to dispatch password reset request');
+    return { debugToken: data.debugToken, message: data.message };
+  };
+
+  const confirmPasswordReset = async (tokenStr: string, newPassword: string): Promise<void> => {
+    const res = await fetch('/api/v1/auth/password-reset/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: tokenStr, newPassword }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || data.title || 'Password reset confirmation failed');
+  };
+
+  const changePassword = async (currentPassword: string, newPassword: string): Promise<void> => {
+    if (!token) throw new Error('Not authenticated');
+    const res = await fetch('/api/v1/auth/change-password', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || data.title || 'Password change failed');
+  };
+
+  return (
+    <AuthContext.Provider
+      value={{
+        user,
+        token,
+        loading,
+        authModalOpen,
+        authModalTab,
+        accountOpeningWelcomeOpen,
+        openAuthModal,
+        openAccountOpeningFlow,
+        closeAuthModal,
+        dismissAccountOpeningWelcome,
+        proceedToRegistrationFromWelcome,
+        login,
+        logout,
+        register,
+        refreshUser,
+        startMfa,
+        confirmMfa,
+        requestPasswordReset,
+        confirmPasswordReset,
+        changePassword,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth() {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
+}

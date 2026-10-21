@@ -1,0 +1,243 @@
+@import "tailwindcss";
+
+@theme {
+  /* Sampled from avenora-header-logo.jpg */
+  --color-brand-deep: #003933;
+  --color-brand-primary: #076c64;
+  --color-brand-accent: #159d79;
+  --color-brand-accent-light: #e8f6f2;
+  --color-brand-warm: #f8fbf9;
+  --color-brand-neutral: #eef4f2;
+  --color-brand-dark: #0f1f1e;
+  --color-brand-muted: #5c6f6c;
+  --color-brand-gold: #c6a568;
+
+  --font-sans: "Source Sans 3", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-serif: "Source Serif 4", ui-serif, Georgia, "Times New Roman", serif;
+}
+
+:root {
+  --gradient-brand: linear-gradient(135deg, #003933 0%, #076c64 48%, #159d79 100%);
+  --gradient-brand-subtle: linear-gradient(
+    180deg,
+    color-mix(in srgb, #003933 6%, transparent) 0%,
+    transparent 100%
+  );
+}
+
+@keyframes news-broadcast-scroll {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+@layer utilities {
+  .portal-nav-scroll {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .portal-nav-scroll::-webkit-scrollbar {
+    display: none;
+  }
+
+  .animate-news-broadcast {
+    animation: news-broadcast-scroll 55s linear infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-news-broadcast {
+      animation: none;
+    }
+  }
+
+  .bg-brand-gradient {
+    background-image: var(--gradient-brand);
+  }
+
+  .text-brand-gradient {
+    background-image: var(--gradient-brand);
+    color: transparent;
+    background-clip: text;
+    -webkit-background-clip: text;
+  }
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    font-weight: 400;
+    font-size: 1rem;
+    line-height: 1.6;
+    letter-spacing: 0.01em;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: var(--font-serif);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+  }
+
+  h1 {
+    font-weight: 700;
+    letter-spacing: -0.03em;
+  }
+
+  button,
+  input,
+  select,
+  textarea,
+  label {
+    font-family: var(--font-sans);
+  }
+
+  strong,
+  b {
+    font-weight: 600;
+  }
+
+  .font-tabular,
+  [data-financial-amount="true"] {
+    font-variant-numeric: tabular-nums lining-nums;
+    font-feature-settings: "tnum" 1, "lnum" 1;
+  }
+
+  :root {
+    --portal-mobile-bottom-nav-height: calc(4.5rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  html:has(.app-viewport-shell),
+  body:has(.app-viewport-shell) {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  #root:has(.app-viewport-shell) {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  #root {
+    min-height: 100%;
+  }
+
+  .app-viewport-shell {
+    height: 100svh;
+    max-height: 100svh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  @supports (height: 100dvh) {
+    .app-viewport-shell {
+      height: 100dvh;
+      max-height: 100dvh;
+    }
+  }
+
+  .app-scroll-pane {
+    flex: 1 1 0%;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+  }
+
+  .public-site-shell {
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .public-site-main {
+    flex: 1 1 auto;
+    width: 100%;
+    padding-bottom: max(2.5rem, calc(1.5rem + env(safe-area-inset-bottom, 0px)));
+    scroll-padding-bottom: max(2.5rem, calc(1.5rem + env(safe-area-inset-bottom, 0px)));
+  }
+
+  .portal-mobile-shell {
+    flex: 1 1 0%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .portal-mobile-main {
+    padding-bottom: calc(var(--portal-mobile-bottom-nav-height) + 2rem);
+    scroll-padding-bottom: calc(var(--portal-mobile-bottom-nav-height) + 2rem);
+  }
+
+  .portal-mobile-scroll-end {
+    block-size: calc(var(--portal-mobile-bottom-nav-height) + 1.5rem);
+    flex-shrink: 0;
+    pointer-events: none;
+  }
+
+  .portal-bottom-nav {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .portal-mobile-narrow .max-w-6xl {
+    max-width: 100%;
+  }
+
+  .portal-page-stack {
+    padding-bottom: max(2rem, env(safe-area-inset-bottom, 0px));
+  }
+
+  .modal-overlay-scroll {
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+    align-items: flex-start;
+    padding-top: max(0.75rem, env(safe-area-inset-top, 0px));
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+  }
+
+  @media (min-width: 640px) {
+    .modal-overlay-scroll {
+      align-items: center;
+    }
+  }
+
+  .modal-panel-scroll {
+    max-height: min(calc(100dvh - 1.5rem), 920px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    width: 100%;
+  }
+
+  .modal-panel-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+}
