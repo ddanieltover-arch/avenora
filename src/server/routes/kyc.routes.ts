@@ -44,6 +44,12 @@ const KycSubmitSchema = z.object({
         fileName: z.string(),
         mimeType: z.string(),
         fileSize: z.number().positive(),
+        /** Optional staff-review preview (data URL). Capped server-side. */
+        previewDataUrl: z
+          .string()
+          .startsWith('data:')
+          .max(1_800_000)
+          .optional(),
       })
     )
     .optional(),
@@ -88,6 +94,7 @@ kycRouter.get('/me', authenticate, (req: Request, res: Response) => {
  * POST /api/v1/kyc/submit
  * Customer submission for identity verification.
  */
+/** KYC submit must remain available while the account is PENDING_VERIFICATION / inactive. */
 kycRouter.post('/submit', authenticate, (req: Request, res: Response, next: NextFunction) => {
   try {
     const validated = KycSubmitSchema.parse(req.body);

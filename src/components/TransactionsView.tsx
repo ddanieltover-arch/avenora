@@ -81,10 +81,21 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
 
       const res = await fetch(`/api/v1/wallets/transactions?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store',
       });
       const data = await res.json();
       if (res.ok && data.transactions) {
         setTransactions(data.transactions);
+      } else if (res.status === 304) {
+        // Stale cache — force a clean reload
+        const retry = await fetch(`/api/v1/wallets/transactions?${params.toString()}&_=${Date.now()}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-store',
+        });
+        const retryData = await retry.json();
+        if (retry.ok && retryData.transactions) {
+          setTransactions(retryData.transactions);
+        }
       }
     } catch (err) {
       console.error('Failed to load transaction history', err);
@@ -338,8 +349,16 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                     </td>
 
                     <td className="py-3.5 px-4 text-center">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-brand-accent-light text-[#076c64] border border-brand-accent/30">
-                        POSTED
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                          tx.status === 'PENDING_REVIEW'
+                            ? 'bg-amber-50 text-amber-800 border-amber-200'
+                            : tx.status === 'REVERSED'
+                            ? 'bg-rose-50 text-rose-800 border-rose-200'
+                            : 'bg-brand-accent-light text-[#076c64] border-brand-accent/30'
+                        }`}
+                      >
+                        {tx.status || 'POSTED'}
                       </span>
                     </td>
                   </tr>

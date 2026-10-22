@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import http from 'http';
 import { createExpressApp } from '../../src/server/app.ts';
+import { defaultAuthService } from '../../src/server/services/auth.service.ts';
 
 describe('Admin & Operations Control Center HTTP API (/api/v1/admin)', () => {
   let server: http.Server;
@@ -27,6 +28,8 @@ describe('Admin & Operations Control Center HTTP API (/api/v1/admin)', () => {
         resolve();
       });
     });
+
+    await defaultAuthService.seedStaffUsersForAutomatedTests();
 
     customerEmail = `admin.test.customer.${Date.now()}@example.com`;
     const regRes = await fetch(`${baseUrl}/api/v1/auth/register`, {

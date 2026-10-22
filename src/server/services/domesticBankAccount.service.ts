@@ -10,6 +10,7 @@ import {
 import { resolvePrimaryFiatCurrency } from '../../domain/country/countryPrimaryCurrency.ts';
 import { DomesticSchemeId } from '../../domain/country/CountryBankingRegistry.ts';
 import { CountryIdentifierResult, IIdentifierProvider } from '../../domain/country/CountryTypes.ts';
+import { isKycBypassEnabled } from '../../config/prototypeAccess.ts';
 import { AuthService, defaultAuthService } from './auth.service.ts';
 import { defaultAuditService } from './audit.service.ts';
 import { defaultIdentifierProvider } from './identifier.service.ts';
@@ -50,9 +51,14 @@ export interface CustomerDomesticBankAccountRecord {
 const PROTOTYPE_DISCLAIMER =
   'SIMULATED ACCOUNT — PROTOTYPE ONLY — NOT FOR REAL DEPOSITS, WITHDRAWALS, OR LIVE FINANCIAL SETTLEMENT.';
 
+/** Bump when identifier component layout changes so existing in-memory accounts regenerate. */
+const DOMESTIC_FORMAT_VERSION = '1.2.1';
+
 export class DomesticBankAccountService {
   private accountsByUserId = new Map<string, CustomerDomesticBankAccountRecord>();
   private rawValueOwner = new Map<string, string>();
+  /** Ensures Pix keys are unique across all customer domestic accounts. */
+  private pixKeyOwner = new Map<string, string>();
   private userLocks = new Map<string, Promise<void>>();
 
   constructor(
@@ -62,6 +68,19 @@ export class DomesticBankAccountService {
 
   public getPrimaryAccountForUser(userId: string): CustomerDomesticBankAccountRecord | undefined {
     return this.accountsByUserId.get(userId);
+  }
+
+  /** Drop stored domestic identifiers (e.g. when reversing a KYC bypass unlock). */
+  public clearPrimaryAccountForUser(userId: string): void {
+    const existing = this.accountsByUserId.get(userId);
+    if (existing?.rawValue) {
+      this.rawValueOwner.delete(existing.rawValue);
+    }
+    const pixKey = existing?.components?.pixKey;
+    if (pixKey) {
+      this.pixKeyOwner.delete(pixKey);
+    }
+    this.accountsByUserId.delete(userId);
   }
 
   public getCustomerSafeView(record: CustomerDomesticBankAccountRecord) {
@@ -75,9 +94,7 @@ export class DomesticBankAccountService {
       maskedValue: record.maskedValue,
       displayFields: this.buildDisplayFields(record),
       components: record.generationStatus === 'GENERATED' ? record.components : {},
-      isSimulated: record.isSimulated,
       source: record.source,
-      disclaimer: record.disclaimer,
       generatedAt: record.generatedAt,
       lastError: record.lastError,
     };
@@ -94,6 +111,10 @@ export class DomesticBankAccountService {
     if (c.banco) fields.push({ key: 'banco', label: 'Bank code', value: c.banco });
     if (c.agencia) fields.push({ key: 'agencia', label: 'Branch (Agência)', value: c.agencia });
     if (c.conta) fields.push({ key: 'conta', label: 'Account (Conta)', value: c.conta });
+    // Pix is Brazil-only; only present on BR FEBRABAN generations.
+    if (c.pixKey && record.verifiedCountryCode === 'BR') {
+      fields.push({ key: 'pixKey', label: 'Pix key', value: c.pixKey });
+    }
     if (c.blz) fields.push({ key: 'blz', label: 'Bank code (BLZ)', value: c.blz });
     if (c.bank) fields.push({ key: 'bank', label: 'Bank code', value: c.bank });
     if (c.branch) fields.push({ key: 'branch', label: 'Branch code', value: c.branch });
@@ -119,7 +140,7 @@ export class DomesticBankAccountService {
   }
 
   /**
-   * Idempotent orchestration after KYC approval is durably recorded.
+   * Idempotent orchestration after KYC approval (or prototype KYC bypass).
    */
   public async ensurePrimaryAccountAfterKycApproval(params: {
     userId: string;
@@ -129,24 +150,81 @@ export class DomesticBankAccountService {
     return this.withUserLock(params.userId, () => this.ensurePrimaryAccountAfterKycApprovalInternal(params));
   }
 
+  /**
+   * Generate/backfill domestic identifiers for KYC-approved users (or when bypass is explicitly enabled).
+   */
+  public async ensurePrimaryAccountForActiveUser(params: {
+    userId: string;
+    correlationId?: string;
+  }): Promise<CustomerDomesticBankAccountRecord | undefined> {
+    const user = this.authService.getUserById(params.userId);
+    if (!user) return undefined;
+
+    const bypass = isKycBypassEnabled();
+    if (!bypass && user.kycStatus !== 'APPROVED') {
+      return this.getPrimaryAccountForUser(params.userId);
+    }
+
+    const { defaultKycService } = await import('./kyc.service.ts');
+    const kycProfile = defaultKycService.getOrCreateProfile(params.userId);
+
+    // Bypass only: force-approve so identifiers can unlock without the KYC workflow.
+    if (bypass) {
+      kycProfile.status = 'APPROVED';
+      kycProfile.verifiedCountryCode = kycProfile.verifiedCountryCode || user.countryCode;
+      if (!kycProfile.residentialAddress) {
+        kycProfile.residentialAddress = {
+          street: 'Prototype address pending KYC submission',
+          city: 'N/A',
+          postalCode: '00000',
+          country: user.countryCode,
+        };
+      }
+      if (user.kycStatus !== 'APPROVED') {
+        user.kycStatus = 'APPROVED';
+        user.updatedAt = new Date();
+      }
+    }
+
+    return this.ensurePrimaryAccountAfterKycApproval({
+      userId: params.userId,
+      kycProfile,
+      correlationId: params.correlationId,
+    });
+  }
+
   private async ensurePrimaryAccountAfterKycApprovalInternal(params: {
     userId: string;
     kycProfile: KycProfileRecord;
     correlationId?: string;
   }): Promise<CustomerDomesticBankAccountRecord> {
     const existing = this.accountsByUserId.get(params.userId);
-    if (existing?.generationStatus === 'GENERATED') {
+    if (
+      existing?.generationStatus === 'GENERATED' &&
+      existing.formatVersion === DOMESTIC_FORMAT_VERSION
+    ) {
       return existing;
     }
     if (existing?.generationStatus === 'FORMAT_NOT_IMPLEMENTED') {
       return existing;
     }
-    if (existing?.generationStatus === 'COUNTRY_MISMATCH_REQUIRES_REVIEW') {
+    if (existing?.generationStatus === 'COUNTRY_MISMATCH_REQUIRES_REVIEW' && !isKycBypassEnabled()) {
       return existing;
+    }
+    // Outdated format version: free the old identifier so we can regenerate country-format numbers.
+    if (existing?.generationStatus === 'GENERATED') {
+      if (existing.rawValue) {
+        this.rawValueOwner.delete(existing.rawValue);
+      }
+      if (existing.components?.pixKey) {
+        this.pixKeyOwner.delete(existing.components.pixKey);
+      }
+      this.accountsByUserId.delete(params.userId);
     }
 
     const user = this.authService.getUserById(params.userId);
-    if (!user || user.kycStatus !== 'APPROVED') {
+    const bypass = isKycBypassEnabled();
+    if (!user || (!bypass && user.kycStatus !== 'APPROVED')) {
       return this.upsertPlaceholder(params.userId, {
         generationStatus: 'NOT_ELIGIBLE',
         verifiedCountryCode: user?.countryCode ?? 'US',
@@ -155,7 +233,7 @@ export class DomesticBankAccountService {
       });
     }
 
-    // Heal in-memory KYC profile if user is APPROVED but profile was recreated after restart.
+    // Heal in-memory KYC profile if user is APPROVED / bypassed but profile was recreated after restart.
     if (params.kycProfile.status !== 'APPROVED') {
       params.kycProfile.status = 'APPROVED';
       params.kycProfile.verifiedCountryCode =
@@ -165,7 +243,7 @@ export class DomesticBankAccountService {
     }
 
     const signupCountry = user.countryCode.trim().toUpperCase();
-    const verifiedCountry = (
+    let verifiedCountry = (
       params.kycProfile.verifiedCountryCode ||
       params.kycProfile.residentialAddress?.country ||
       signupCountry
@@ -173,9 +251,14 @@ export class DomesticBankAccountService {
       .trim()
       .toUpperCase();
 
+    // Prototype bypass: always use signup country so accounts unlock immediately.
+    if (bypass) {
+      verifiedCountry = signupCountry;
+    }
+
     params.kycProfile.verifiedCountryCode = verifiedCountry;
 
-    if (verifiedCountry !== signupCountry) {
+    if (!bypass && verifiedCountry !== signupCountry) {
       const mismatch = this.upsertPlaceholder(params.userId, {
         generationStatus: 'COUNTRY_MISMATCH_REQUIRES_REVIEW',
         verifiedCountryCode: verifiedCountry,
@@ -250,6 +333,14 @@ export class DomesticBankAccountService {
         throw new Error('Unique domestic identifier collision; retry required.');
       }
 
+      const pixKey = identifier.components?.pixKey;
+      if (pixKey) {
+        const pixOwner = this.pixKeyOwner.get(pixKey);
+        if (pixOwner && pixOwner !== params.userId) {
+          throw new Error('Unique Pix key collision; retry required.');
+        }
+      }
+
       const generated = this.finalizeRecord(pending, {
         generationStatus: 'GENERATED',
         schemeId: plan.ruleScheme,
@@ -264,13 +355,16 @@ export class DomesticBankAccountService {
         isSimulated: true,
         source: 'SYNTHETIC_GENERATOR',
         disclaimer: identifier.disclaimer || PROTOTYPE_DISCLAIMER,
-        formatVersion: '1.0.0',
+        formatVersion: DOMESTIC_FORMAT_VERSION,
         ruleSourceVersion: plan.ruleVersion,
         generatedAt: identifier.generatedAt ?? new Date(),
         lastError: undefined,
       });
 
       this.rawValueOwner.set(identifier.rawValue, params.userId);
+      if (pixKey) {
+        this.pixKeyOwner.set(pixKey, params.userId);
+      }
       this.auditGeneration(params.userId, generated, params.correlationId);
       return generated;
     } catch (err) {
@@ -299,7 +393,7 @@ export class DomesticBankAccountService {
     kycProfile: KycProfileRecord;
     dryRun?: boolean;
   }): Promise<{ dryRun: boolean; preview?: CustomerDomesticBankAccountRecord; result?: CustomerDomesticBankAccountRecord }> {
-    if (params.kycProfile.status !== 'APPROVED') {
+    if (params.kycProfile.status !== 'APPROVED' && !isKycBypassEnabled()) {
       throw new Error('Cannot retry domestic account generation: KYC is not approved.');
     }
     if (params.dryRun) {
@@ -319,7 +413,7 @@ export class DomesticBankAccountService {
           isSimulated: true,
           source: 'SYNTHETIC_GENERATOR',
           disclaimer: PROTOTYPE_DISCLAIMER,
-          formatVersion: '1.0.0',
+          formatVersion: DOMESTIC_FORMAT_VERSION,
           ruleSourceVersion: plan.ruleVersion,
           createdAt: new Date(),
           updatedAt: new Date(),

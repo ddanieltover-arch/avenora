@@ -4,42 +4,25 @@
  */
 
 import { getCurrency } from '../domain/money/Currency.ts';
+import {
+  illustrativeLocalUnitsPerUsd,
+  illustrativeUsdPerLocalUnit,
+  LOCAL_UNITS_PER_USD,
+} from './illustrativeUsdRates.ts';
 
-const DEMO_RATES: Record<string, number> = {
-  USD_EUR: 0.92,
-  EUR_USD: 1.087,
-  USD_BRL: 5.45,
-  BRL_USD: 0.183,
-  EUR_BRL: 5.92,
-  BRL_EUR: 0.169,
+const DEMO_PAIR_OVERRIDES: Record<string, number> = {
+  USD_EUR: LOCAL_UNITS_PER_USD.EUR,
+  EUR_USD: 1 / LOCAL_UNITS_PER_USD.EUR,
+  USD_BRL: LOCAL_UNITS_PER_USD.BRL,
+  BRL_USD: 1 / LOCAL_UNITS_PER_USD.BRL,
+  USD_GBP: LOCAL_UNITS_PER_USD.GBP,
+  GBP_USD: 1 / LOCAL_UNITS_PER_USD.GBP,
   BTC_USD: 68500.0,
-  USD_BTC: 0.0000146,
-  BTC_EUR: 63000.0,
-  EUR_BTC: 0.0000158,
-  BTC_BRL: 373000.0,
-  BRL_BTC: 0.00000268,
-  USD_GBP: 0.79,
-  GBP_USD: 1.265,
-  EUR_GBP: 0.86,
-  GBP_EUR: 1.163,
-  GBP_BRL: 6.85,
-  BRL_GBP: 0.146,
-  BTC_GBP: 54000.0,
-  GBP_BTC: 0.0000185,
+  USD_BTC: 1 / 68500.0,
 };
 
 function illustrativeUsdPerUnit(currency: string): number {
-  const code = currency.toUpperCase();
-  if (code === 'USD') return 1;
-  if (code === 'BTC') return 68_500;
-
-  const directToUsd = DEMO_RATES[`${code}_USD`];
-  if (directToUsd) return directToUsd;
-
-  const usdToCode = DEMO_RATES[`USD_${code}`];
-  if (usdToCode && usdToCode > 0) return 1 / usdToCode;
-
-  return 1;
+  return illustrativeUsdPerLocalUnit(currency);
 }
 
 export function resolveIllustrativeRate(sourceCurrency: string, destinationCurrency: string): number {
@@ -47,14 +30,23 @@ export function resolveIllustrativeRate(sourceCurrency: string, destinationCurre
   const dest = destinationCurrency.toUpperCase();
   if (source === dest) return 1;
 
-  const direct = DEMO_RATES[`${source}_${dest}`];
+  const direct = DEMO_PAIR_OVERRIDES[`${source}_${dest}`];
   if (direct) return direct;
 
-  const inverse = DEMO_RATES[`${dest}_${source}`];
+  const inverse = DEMO_PAIR_OVERRIDES[`${dest}_${source}`];
   if (inverse && inverse > 0) return 1 / inverse;
+
+  // Prefer USD→local table when converting from USD.
+  if (source === 'USD') {
+    return illustrativeLocalUnitsPerUsd(dest);
+  }
+  if (dest === 'USD') {
+    return illustrativeUsdPerUnit(source);
+  }
 
   const usdPerSource = illustrativeUsdPerUnit(source);
   const usdPerDest = illustrativeUsdPerUnit(dest);
+  if (usdPerDest <= 0) return 1;
   return usdPerSource / usdPerDest;
 }
 
@@ -69,6 +61,55 @@ export function walletAvailableMajor(account: {
   const minor = Number(account.availableBalanceMinor || account.balanceMinor || 0);
   if (!Number.isFinite(minor)) return 0;
   return minor / 10 ** def.minorUnits;
+}
+
+export function walletHoldMajor(account: {
+  currency?: string;
+  currencyCode?: string;
+  pendingHoldMinor?: string;
+}): number {
+  const code = (account.currency || account.currencyCode || 'USD').toUpperCase();
+  const def = getCurrency(code);
+  const minor = Number(account.pendingHoldMinor || 0);
+  if (!Number.isFinite(minor)) return 0;
+  return minor / 10 ** def.minorUnits;
+}
+
+/** Sum wallet balances converted into a single display currency. */
+export function portfolioValueMajor(
+  accounts: Array<{
+    currency?: string;
+    currencyCode?: string;
+    availableBalanceMinor?: string;
+    balanceMinor?: string;
+  }>,
+  targetCurrency: string,
+): number {
+  const target = targetCurrency.toUpperCase();
+  return accounts.reduce((sum, account) => {
+    const code = (account.currency || account.currencyCode || '').toUpperCase();
+    if (!code) return sum;
+    const major = walletAvailableMajor(account);
+    return sum + major * resolveIllustrativeRate(code, target);
+  }, 0);
+}
+
+/** Sum pending holds converted into a single display currency. */
+export function portfolioHoldMajor(
+  accounts: Array<{
+    currency?: string;
+    currencyCode?: string;
+    pendingHoldMinor?: string;
+  }>,
+  targetCurrency: string,
+): number {
+  const target = targetCurrency.toUpperCase();
+  return accounts.reduce((sum, account) => {
+    const code = (account.currency || account.currencyCode || '').toUpperCase();
+    if (!code) return sum;
+    const major = walletHoldMajor(account);
+    return sum + major * resolveIllustrativeRate(code, target);
+  }, 0);
 }
 
 export function formatMajorBalance(major: number, currencyCode: string): string {

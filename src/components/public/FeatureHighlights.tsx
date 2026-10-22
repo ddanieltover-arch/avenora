@@ -63,7 +63,7 @@ export const FeatureHighlights: React.FC<FeatureHighlightsProps> = ({ onNavigate
             return (
               <div
                 key={feat.id}
-                className="bg-white rounded-3xl p-8 border border-slate-200/80 shadow-sm hover:shadow-md transition flex flex-col justify-between group"
+                className="public-surface-card p-8 hover:shadow-md transition flex flex-col justify-between group"
               >
                 <div className="space-y-5">
                   <div className="flex items-center justify-between">

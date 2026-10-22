@@ -6,6 +6,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { authenticate, requireRoles } from '../middleware/auth.ts';
+import { defaultAuthService } from '../services/auth.service.ts';
 import { defaultDomesticBankAccountService } from '../services/domesticBankAccount.service.ts';
 import { defaultKycService } from '../services/kyc.service.ts';
 import { getCoverageMatrix } from '../../domain/country/CountryBankingRegistry.ts';
@@ -19,33 +20,19 @@ domesticBankAccountRouter.get('/me', authenticate, async (req: Request, res: Res
   try {
     const user = req.user!;
     let record = defaultDomesticBankAccountService.getPrimaryAccountForUser(user.id);
-    const kycStatus = user.kycStatus;
 
-    // Backfill: generate country-format account numbers once user KYC is APPROVED
-    // (also heals profile/status drift after server restart).
-    if ((!record || record.generationStatus === 'NOT_ELIGIBLE' || record.generationStatus === 'PENDING_GENERATION' || record.generationStatus === 'GENERATION_FAILED') && kycStatus === 'APPROVED') {
-      const kycProfile = defaultKycService.getOrCreateProfile(user.id);
-      record = await defaultDomesticBankAccountService.ensurePrimaryAccountAfterKycApproval({
-        userId: user.id,
-        kycProfile,
-        correlationId: `domestic_me_${user.id}`,
-      });
-    }
+    // Backfill / refresh country-format account numbers (KYC bypass generates immediately in prototype mode).
+    record = await defaultDomesticBankAccountService.ensurePrimaryAccountForActiveUser({
+      userId: user.id,
+      correlationId: `domestic_me_${user.id}`,
+    });
+
+    const kycStatus = defaultAuthService.getUserById(user.id)?.kycStatus ?? user.kycStatus;
 
     if (!record) {
-      if (kycStatus === 'APPROVED') {
-        res.json({
-          generationStatus: 'PENDING_GENERATION',
-          message: 'Identity verification is approved. Domestic account details are being prepared.',
-          disclaimer:
-            'SIMULATED ACCOUNT — PROTOTYPE ONLY — NOT FOR REAL DEPOSITS, WITHDRAWALS, OR LIVE FINANCIAL SETTLEMENT.',
-        });
-        return;
-      }
-
       res.json({
         generationStatus: 'NOT_ELIGIBLE',
-        message: 'Complete identity verification to receive your simulated domestic account details.',
+        message: 'Domestic account details are not available yet.',
         kycStatus,
       });
       return;

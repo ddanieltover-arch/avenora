@@ -31,6 +31,10 @@ import {
   validateBtcWithdrawalAddress,
   validateWithdrawalBankingDetails,
 } from '../../domain/country/withdrawalRailFields.ts';
+import {
+  illustrativeLocalUnitsPerUsd,
+  illustrativeUsdPerLocalUnit,
+} from '../../lib/illustrativeUsdRates.ts';
 
 export interface WalletAccountView {
   id: string;
@@ -82,7 +86,7 @@ export interface FinancialOperationResult {
     | 'CARD_SETTLEMENT'
     | 'GRANT_DISBURSEMENT'
     | 'COMPENSATING_REVERSAL';
-  status: 'POSTED' | 'REVERSED';
+  status: 'POSTED' | 'REVERSED' | 'PENDING_REVIEW';
   currency: string;
   amountMinor: string;
   formattedAmount: string;
@@ -115,6 +119,7 @@ interface IdempotencyEntry {
 
 export type PendingDepositKind = 'FIAT' | 'BTC';
 export type PendingDepositStatus = 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED';
+export type PendingFundingOrigin = 'CUSTOMER' | 'ADMIN';
 
 export interface PendingDepositRecord {
   id: string;
@@ -137,6 +142,9 @@ export interface PendingDepositRecord {
   holdJournalEntryId: string;
   referenceNumber: string;
   releaseJournalEntryId?: string;
+  origin: PendingFundingOrigin;
+  initiatedByUserId?: string;
+  initiationReason?: string;
 }
 
 export interface BtcDepositProofRecord {
@@ -173,6 +181,9 @@ export interface PendingWithdrawalRecord {
   holdJournalEntryId: string;
   referenceNumber: string;
   releaseJournalEntryId?: string;
+  origin: PendingFundingOrigin;
+  initiatedByUserId?: string;
+  initiationReason?: string;
 }
 
 export class WalletService {
@@ -184,43 +195,9 @@ export class WalletService {
 
 
   // Illustrative reference rates (strictly synthetic demo rates)
-  private readonly DEMO_RATES: Record<string, number> = {
-    'USD_EUR': 0.92,
-    'EUR_USD': 1.087,
-    'USD_BRL': 5.45,
-    'BRL_USD': 0.183,
-    'EUR_BRL': 5.92,
-    'BRL_EUR': 0.169,
-    'BTC_USD': 68500.0,
-    'USD_BTC': 0.0000146,
-    'BTC_EUR': 63000.0,
-    'EUR_BTC': 0.0000158,
-    'BTC_BRL': 373000.0,
-    'BRL_BTC': 0.00000268,
-    'USD_GBP': 0.79,
-    'GBP_USD': 1.265,
-    'EUR_GBP': 0.86,
-    'GBP_EUR': 1.163,
-    'GBP_BRL': 6.85,
-    'BRL_GBP': 0.146,
-    'BTC_GBP': 54000.0,
-    'GBP_BTC': 0.0000185,
-  };
-
   /** Illustrative USD value of one unit of currency (prototype triangulation). */
   private illustrativeUsdPerUnit(currency: string): number {
-    const code = currency.toUpperCase();
-    if (code === 'USD') return 1;
-    if (code === 'BTC') return 68_500;
-
-    const directToUsd = this.DEMO_RATES[`${code}_USD`];
-    if (directToUsd) return directToUsd;
-
-    const usdToCode = this.DEMO_RATES[`USD_${code}`];
-    if (usdToCode && usdToCode > 0) return 1 / usdToCode;
-
-    // Prototype fallback: treat unlisted fiat as USD-parity for demo FX only.
-    return 1;
+    return illustrativeUsdPerLocalUnit(currency);
   }
 
   private resolveIllustrativeRate(sourceCurrency: string, destinationCurrency: string): number {
@@ -228,14 +205,16 @@ export class WalletService {
     const dest = destinationCurrency.toUpperCase();
     if (source === dest) return 1;
 
-    const direct = this.DEMO_RATES[`${source}_${dest}`];
-    if (direct) return direct;
-
-    const inverse = this.DEMO_RATES[`${dest}_${source}`];
-    if (inverse && inverse > 0) return 1 / inverse;
+    if (source === 'USD') {
+      return illustrativeLocalUnitsPerUsd(dest);
+    }
+    if (dest === 'USD') {
+      return this.illustrativeUsdPerUnit(source);
+    }
 
     const usdPerSource = this.illustrativeUsdPerUnit(source);
     const usdPerDest = this.illustrativeUsdPerUnit(dest);
+    if (usdPerDest <= 0) return 1;
     return usdPerSource / usdPerDest;
   }
 
@@ -592,6 +571,8 @@ export class WalletService {
     });
 
     const newSenderBalance = defaultLedgerService.getAccountBalance(senderAccount.ledgerAccountId);
+    const newRecipientBalance = defaultLedgerService.getAccountBalance(recipientAccount.ledgerAccountId);
+    const timestamp = new Date().toISOString();
 
     const result: FinancialOperationResult = {
       transactionId: txId,
@@ -607,7 +588,7 @@ export class WalletService {
       idempotencyKey: key,
       isSimulated: true,
       authoritativeBalance: newSenderBalance.formatted,
-      timestamp: new Date().toISOString(),
+      timestamp,
       userId: senderUserId,
       direction: 'DEBIT',
       counterparty: recipientEmailOrId,
@@ -615,6 +596,29 @@ export class WalletService {
     };
 
     this.recordIdempotency(key, senderUserId, 'TRANSFER', params, result);
+
+    // Recipient mirror so the credit appears in their (and admin) transaction history.
+    this.recordTransaction({
+      transactionId: `${txId}_rcv`,
+      referenceNumber: refNum,
+      operationType: 'INTERNAL_TRANSFER',
+      status: 'POSTED',
+      currency,
+      amountMinor: money.amountMinor.toString(),
+      formattedAmount: money.toDisplayString(),
+      journalEntryId: entry.id,
+      senderAccountId: senderAccount.ledgerAccountId,
+      recipientAccountId: recipientAccount.ledgerAccountId,
+      idempotencyKey: `${key}_rcv`,
+      isSimulated: true,
+      authoritativeBalance: newRecipientBalance.formatted,
+      timestamp,
+      userId: recipientWallet.userId,
+      direction: 'CREDIT',
+      counterparty: senderWallet.name || senderUserId,
+      narration: params.note || `Internal transfer from ${senderWallet.name || senderUserId}`,
+    });
+
     return result;
   }
 
@@ -941,8 +945,10 @@ export class WalletService {
       status: 'PENDING_REVIEW',
       holdJournalEntryId: entry.id,
       referenceNumber: refNum,
+      origin: 'CUSTOMER',
     };
     this.pendingDeposits.push(record);
+    this.recordPendingDepositHistory(record, entry.id, txId);
 
     defaultAuditService.logAction({
       action: params.kind === 'BTC' ? 'BTC_DEPOSIT_PROOF_SUBMITTED' : 'FIAT_DEPOSIT_REQUESTED',
@@ -1030,6 +1036,35 @@ export class WalletService {
     record.reviewNotes = params.notes;
     record.releaseJournalEntryId = releaseEntry.id;
 
+    const availBalance = defaultLedgerService.getAccountBalance(availAccountId);
+    this.updateHistoryByReference(
+      record.userId,
+      record.referenceNumber,
+      {
+        status: 'POSTED',
+        journalEntryId: releaseEntry.id,
+        transactionId: txId,
+        authoritativeBalance: availBalance.formatted,
+        narration: `${record.currency} deposit approved via ${record.sourceRail || record.kind}`,
+        timestamp: new Date().toISOString(),
+      },
+      {
+        transactionId: txId,
+        operationType: 'SIMULATED_DEPOSIT',
+        status: 'POSTED',
+        currency: record.currency,
+        amountMinor: record.amountMinor,
+        formattedAmount: record.formattedAmount,
+        journalEntryId: releaseEntry.id,
+        idempotencyKey: `idem_${record.id}`,
+        isSimulated: true,
+        authoritativeBalance: availBalance.formatted,
+        timestamp: new Date().toISOString(),
+        direction: 'CREDIT',
+        narration: `${record.currency} deposit approved via ${record.sourceRail || record.kind}`,
+      },
+    );
+
     defaultAuditService.logAction({
       action: 'DEPOSIT_APPROVED',
       actorUserId: params.actorUserId,
@@ -1102,6 +1137,33 @@ export class WalletService {
     record.reviewedByUserId = params.actorUserId;
     record.reviewNotes = params.reason.trim();
     record.releaseJournalEntryId = releaseEntry.id;
+
+    this.updateHistoryByReference(
+      record.userId,
+      record.referenceNumber,
+      {
+        status: 'REVERSED',
+        journalEntryId: releaseEntry.id,
+        transactionId: txId,
+        narration: `${record.currency} deposit rejected — ${params.reason.trim()}`,
+        timestamp: new Date().toISOString(),
+      },
+      {
+        transactionId: txId,
+        operationType: 'SIMULATED_DEPOSIT',
+        status: 'REVERSED',
+        currency: record.currency,
+        amountMinor: record.amountMinor,
+        formattedAmount: record.formattedAmount,
+        journalEntryId: releaseEntry.id,
+        idempotencyKey: `idem_${record.id}`,
+        isSimulated: true,
+        authoritativeBalance: '—',
+        timestamp: new Date().toISOString(),
+        direction: 'CREDIT',
+        narration: `${record.currency} deposit rejected — ${params.reason.trim()}`,
+      },
+    );
 
     defaultAuditService.logAction({
       action: 'DEPOSIT_REJECTED',
@@ -1209,8 +1271,10 @@ export class WalletService {
       status: 'PENDING_REVIEW',
       holdJournalEntryId: entry.id,
       referenceNumber: refNum,
+      origin: 'CUSTOMER',
     };
     this.pendingWithdrawals.push(record);
+    this.recordPendingWithdrawalHistory(record, entry.id, txId);
 
     defaultAuditService.logAction({
       action: params.kind === 'BTC' ? 'BTC_WITHDRAWAL_REQUESTED' : 'FIAT_WITHDRAWAL_REQUESTED',
@@ -1305,6 +1369,37 @@ export class WalletService {
     record.reviewNotes = params.notes;
     record.releaseJournalEntryId = releaseEntry.id;
 
+    const availBalance = defaultLedgerService.getAccountBalance(
+      this.getCustomerAvailableLedgerAccountId(record.userId, record.currency),
+    );
+    this.updateHistoryByReference(
+      record.userId,
+      record.referenceNumber,
+      {
+        status: 'POSTED',
+        journalEntryId: releaseEntry.id,
+        transactionId: txId,
+        authoritativeBalance: availBalance.formatted,
+        narration: `${record.currency} withdrawal paid out via ${record.destinationRail || record.kind}`,
+        timestamp: new Date().toISOString(),
+      },
+      {
+        transactionId: txId,
+        operationType: 'SIMULATED_WITHDRAWAL',
+        status: 'POSTED',
+        currency: record.currency,
+        amountMinor: record.amountMinor,
+        formattedAmount: record.formattedAmount,
+        journalEntryId: releaseEntry.id,
+        idempotencyKey: `idem_${record.id}`,
+        isSimulated: true,
+        authoritativeBalance: availBalance.formatted,
+        timestamp: new Date().toISOString(),
+        direction: 'DEBIT',
+        narration: `${record.currency} withdrawal paid out via ${record.destinationRail || record.kind}`,
+      },
+    );
+
     defaultAuditService.logAction({
       action: 'WITHDRAWAL_APPROVED',
       actorUserId: params.actorUserId,
@@ -1378,6 +1473,35 @@ export class WalletService {
     record.reviewNotes = params.reason.trim();
     record.releaseJournalEntryId = releaseEntry.id;
 
+    const availBalance = defaultLedgerService.getAccountBalance(availAccountId);
+    this.updateHistoryByReference(
+      record.userId,
+      record.referenceNumber,
+      {
+        status: 'REVERSED',
+        journalEntryId: releaseEntry.id,
+        transactionId: txId,
+        authoritativeBalance: availBalance.formatted,
+        narration: `${record.currency} withdrawal cancelled — funds returned`,
+        timestamp: new Date().toISOString(),
+      },
+      {
+        transactionId: txId,
+        operationType: 'SIMULATED_WITHDRAWAL',
+        status: 'REVERSED',
+        currency: record.currency,
+        amountMinor: record.amountMinor,
+        formattedAmount: record.formattedAmount,
+        journalEntryId: releaseEntry.id,
+        idempotencyKey: `idem_${record.id}`,
+        isSimulated: true,
+        authoritativeBalance: availBalance.formatted,
+        timestamp: new Date().toISOString(),
+        direction: 'DEBIT',
+        narration: `${record.currency} withdrawal cancelled — funds returned`,
+      },
+    );
+
     defaultAuditService.logAction({
       action: 'WITHDRAWAL_REJECTED',
       actorUserId: params.actorUserId,
@@ -1392,6 +1516,196 @@ export class WalletService {
     });
 
     return record;
+  }
+
+  /**
+   * Admin-initiated funding adjustment: CREDIT queues a pending deposit hold;
+   * DEBIT queues a pending withdrawal hold. Both require a documented reason and
+   * still need approve/reject via the existing ops queues.
+   */
+  public async adminRequestFundingAdjustment(params: {
+    targetUserId: string;
+    direction: 'CREDIT' | 'DEBIT';
+    currency: string;
+    amountDecimal: string;
+    reason: string;
+    actorUserId: string;
+    actorRole: UserRole;
+  }): Promise<
+    | { direction: 'CREDIT'; deposit: PendingDepositRecord }
+    | { direction: 'DEBIT'; withdrawal: PendingWithdrawalRecord }
+  > {
+    const allowed: UserRole[] = ['ADMIN', 'SUPER_ADMIN'];
+    if (!allowed.includes(params.actorRole)) {
+      throw new Error('Access denied: ADMIN or SUPER_ADMIN role required.');
+    }
+
+    const reason = params.reason.trim();
+    if (reason.length < 3) {
+      throw new Error('A documented reason of at least 3 characters is required.');
+    }
+
+    const target = defaultAuthService.getUserById(params.targetUserId);
+    if (!target) {
+      throw new Error('Customer not found.');
+    }
+    if (target.role !== 'CUSTOMER') {
+      throw new Error('Funding adjustments are only allowed for customer accounts.');
+    }
+
+    const currency = params.currency.toUpperCase();
+    if (!isSupportedCurrency(currency)) {
+      throw new Error(`Unsupported currency corridor: ${currency}`);
+    }
+    this.assertCurrencyAllowedForCustomer(params.targetUserId, currency);
+
+    const money = Money.fromDecimalString(params.amountDecimal, currency);
+    if (!money.isPositive()) {
+      throw new Error('Amount must be strictly greater than zero.');
+    }
+
+    if (params.direction === 'CREDIT') {
+      const safeguardingAccountId = this.getSafeguardingAccountId(currency);
+      const holdAccountId = this.getCustomerHoldLedgerAccountId(params.targetUserId, currency);
+      const txId = `tx_dep_hold_${Date.now()}`;
+      const refNum = `DEP-HOLD-${currency}-${Date.now().toString().slice(-6)}`;
+
+      const lines: LedgerLineInput[] = [
+        {
+          accountId: safeguardingAccountId,
+          direction: 'DEBIT',
+          amountMinor: money.amountMinor,
+          description: 'ADMIN_FUNDING inbound pending clearance',
+        },
+        {
+          accountId: holdAccountId,
+          direction: 'CREDIT',
+          amountMinor: money.amountMinor,
+          description: `Admin funding pending review: ${refNum}`,
+        },
+      ];
+      assertDoubleEntryInvariant(lines);
+
+      const entry = defaultLedgerService.postJournalEntry({
+        transactionId: txId,
+        currency,
+        narration: `Pending admin funding credit hold [${refNum}]`,
+        lines,
+      });
+
+      const deposit: PendingDepositRecord = {
+        id: `dep_pending_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        userId: params.targetUserId,
+        kind: 'FIAT',
+        currency,
+        amountDecimal: params.amountDecimal,
+        amountMinor: money.amountMinor.toString(),
+        formattedAmount: money.toDisplayString(),
+        sourceRail: 'ADMIN_FUNDING',
+        submittedAt: new Date(),
+        status: 'PENDING_REVIEW',
+        holdJournalEntryId: entry.id,
+        referenceNumber: refNum,
+        origin: 'ADMIN',
+        initiatedByUserId: params.actorUserId,
+        initiationReason: reason,
+      };
+      this.pendingDeposits.push(deposit);
+      this.recordPendingDepositHistory(deposit, entry.id, txId);
+
+      defaultAuditService.logAction({
+        action: 'ADMIN_WALLET_CREDIT_REQUESTED',
+        actorUserId: params.actorUserId,
+        actorRole: params.actorRole,
+        resourceType: 'WALLET_DEPOSIT',
+        resourceId: deposit.id,
+        reason,
+        details: {
+          targetUserId: params.targetUserId,
+          currency,
+          amountDecimal: params.amountDecimal,
+          referenceNumber: refNum,
+          sourceRail: 'ADMIN_FUNDING',
+        },
+      });
+
+      return { direction: 'CREDIT', deposit };
+    }
+
+    const availAccountId = this.getCustomerAvailableLedgerAccountId(params.targetUserId, currency);
+    const holdAccountId = this.getCustomerHoldLedgerAccountId(params.targetUserId, currency);
+
+    const currentBalance = defaultLedgerService.getAccountBalance(availAccountId);
+    if (currentBalance.balanceMinor < money.amountMinor) {
+      throw new Error(
+        `Insufficient available funds. Required: ${money.toDisplayString()}, Available: ${currentBalance.formatted}`
+      );
+    }
+
+    const txId = `tx_wth_hold_${Date.now()}`;
+    const refNum = `WTH-HOLD-${currency}-${Date.now().toString().slice(-6)}`;
+
+    const lines: LedgerLineInput[] = [
+      {
+        accountId: availAccountId,
+        direction: 'DEBIT',
+        amountMinor: money.amountMinor,
+        description: `Admin debit reservation from available: ${refNum}`,
+      },
+      {
+        accountId: holdAccountId,
+        direction: 'CREDIT',
+        amountMinor: money.amountMinor,
+        description: `Admin debit pending review: ${refNum}`,
+      },
+    ];
+    assertDoubleEntryInvariant(lines);
+
+    const entry = defaultLedgerService.postJournalEntry({
+      transactionId: txId,
+      currency,
+      narration: `Pending admin funding debit hold [${refNum}]`,
+      lines,
+    });
+
+    const withdrawal: PendingWithdrawalRecord = {
+      id: `wth_pending_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      userId: params.targetUserId,
+      kind: 'FIAT',
+      currency,
+      amountDecimal: params.amountDecimal,
+      amountMinor: money.amountMinor.toString(),
+      formattedAmount: money.toDisplayString(),
+      destinationRail: 'ADMIN_ADJUSTMENT',
+      bankingDetails: {},
+      submittedAt: new Date(),
+      status: 'PENDING_REVIEW',
+      holdJournalEntryId: entry.id,
+      referenceNumber: refNum,
+      origin: 'ADMIN',
+      initiatedByUserId: params.actorUserId,
+      initiationReason: reason,
+    };
+    this.pendingWithdrawals.push(withdrawal);
+    this.recordPendingWithdrawalHistory(withdrawal, entry.id, txId);
+
+    defaultAuditService.logAction({
+      action: 'ADMIN_WALLET_DEBIT_REQUESTED',
+      actorUserId: params.actorUserId,
+      actorRole: params.actorRole,
+      resourceType: 'WALLET_WITHDRAWAL',
+      resourceId: withdrawal.id,
+      reason,
+      details: {
+        targetUserId: params.targetUserId,
+        currency,
+        amountDecimal: params.amountDecimal,
+        referenceNumber: refNum,
+        destinationRail: 'ADMIN_ADJUSTMENT',
+      },
+    });
+
+    return { direction: 'DEBIT', withdrawal };
   }
 
   private resolveRecipientWallet(query: string): WalletOverview {
@@ -1458,11 +1772,276 @@ export class WalletService {
     }
   }
 
+  private recordPendingDepositHistory(
+    record: PendingDepositRecord,
+    journalEntryId: string,
+    transactionId: string,
+  ): void {
+    this.recordTransaction({
+      transactionId,
+      referenceNumber: record.referenceNumber,
+      operationType: 'SIMULATED_DEPOSIT',
+      status: 'PENDING_REVIEW',
+      currency: record.currency,
+      amountMinor: record.amountMinor,
+      formattedAmount: record.formattedAmount,
+      journalEntryId,
+      idempotencyKey: `idem_${record.id}`,
+      isSimulated: true,
+      authoritativeBalance: 'Pending review',
+      timestamp: record.submittedAt.toISOString(),
+      userId: record.userId,
+      direction: 'CREDIT',
+      narration: `${record.currency} deposit pending review (${record.sourceRail || record.kind})`,
+      counterparty: record.origin === 'ADMIN' ? 'Admin funding' : undefined,
+    });
+  }
+
+  private recordPendingWithdrawalHistory(
+    record: PendingWithdrawalRecord,
+    journalEntryId: string,
+    transactionId: string,
+  ): void {
+    let availFormatted = '—';
+    try {
+      availFormatted = defaultLedgerService.getAccountBalance(
+        this.getCustomerAvailableLedgerAccountId(record.userId, record.currency),
+      ).formatted;
+    } catch {
+      /* wallet may still be provisioning */
+    }
+
+    this.recordTransaction({
+      transactionId,
+      referenceNumber: record.referenceNumber,
+      operationType: 'SIMULATED_WITHDRAWAL',
+      status: 'PENDING_REVIEW',
+      currency: record.currency,
+      amountMinor: record.amountMinor,
+      formattedAmount: record.formattedAmount,
+      journalEntryId,
+      idempotencyKey: `idem_${record.id}`,
+      isSimulated: true,
+      authoritativeBalance: availFormatted,
+      timestamp: record.submittedAt.toISOString(),
+      userId: record.userId,
+      direction: 'DEBIT',
+      narration: `${record.currency} withdrawal pending review (${record.destinationRail || record.kind})`,
+      counterparty: record.origin === 'ADMIN' ? 'Admin adjustment' : undefined,
+    });
+  }
+
+  private updateHistoryByReference(
+    userId: string,
+    referenceNumber: string,
+    patch: Partial<FinancialOperationResult>,
+    seed?: Omit<FinancialOperationResult, 'referenceNumber' | 'userId'> &
+      Partial<Pick<FinancialOperationResult, 'referenceNumber' | 'userId'>>,
+  ): void {
+    const tx = this.transactionHistory.find(
+      (t) => t.userId === userId && t.referenceNumber === referenceNumber,
+    );
+    if (tx) {
+      Object.assign(tx, patch);
+      return;
+    }
+    if (!seed) return;
+    this.recordTransaction({
+      ...seed,
+      ...patch,
+      referenceNumber,
+      userId,
+      transactionId: patch.transactionId || seed.transactionId,
+      status: patch.status || seed.status,
+      journalEntryId: patch.journalEntryId || seed.journalEntryId,
+      timestamp: patch.timestamp || seed.timestamp,
+      narration: patch.narration || seed.narration,
+      authoritativeBalance: patch.authoritativeBalance || seed.authoritativeBalance,
+    });
+  }
+
+  /**
+   * Build customer-visible history rows from ledger journal entries that touch
+   * the customer's available/hold accounts. Fills gaps when in-memory history
+   * missed a write (or after partial code paths).
+   */
+  private buildLedgerBackedHistory(userId: string): FinancialOperationResult[] {
+    const userAccounts = defaultLedgerService.getUserAccounts(userId);
+    if (userAccounts.length === 0) return [];
+
+    const accountIds = new Set(userAccounts.map((a) => a.id));
+    const availByCurrency = new Map(
+      userAccounts
+        .filter((a) => a.id.endsWith('_avail'))
+        .map((a) => [a.currency.toUpperCase(), a.id] as const),
+    );
+
+    const results: FinancialOperationResult[] = [];
+
+    for (const entry of defaultLedgerService.getEntries()) {
+      const userLines = entry.lines.filter((l) => accountIds.has(l.accountId));
+      if (userLines.length === 0) continue;
+
+      const txId = entry.transactionId;
+      // Ignore unrelated system capitalization noise if it somehow touches a user account.
+      if (txId.startsWith('tx_init_')) continue;
+
+      const availId = availByCurrency.get(entry.currency.toUpperCase());
+      const availLine = availId ? userLines.find((l) => l.accountId === availId) : undefined;
+      const primaryLine = availLine || userLines[0]!;
+      const amountMinor = primaryLine.amountMinor;
+      const money = Money.fromMinor(amountMinor, entry.currency);
+
+      let operationType: FinancialOperationResult['operationType'] = 'SIMULATED_DEPOSIT';
+      let status: FinancialOperationResult['status'] = 'POSTED';
+      let direction: 'CREDIT' | 'DEBIT' =
+        primaryLine.direction === 'CREDIT' ? 'CREDIT' : 'DEBIT';
+
+      const n = (entry.narration || '').toLowerCase();
+      if (txId.startsWith('tx_wth_') || n.includes('withdrawal')) {
+        operationType = 'SIMULATED_WITHDRAWAL';
+        direction = 'DEBIT';
+        if (txId.includes('_hold') || n.includes('pending')) status = 'PENDING_REVIEW';
+        if (n.includes('rejected') || n.includes('cancel')) status = 'REVERSED';
+      } else if (txId.startsWith('tx_dep_') || n.includes('deposit') || n.includes('funding')) {
+        operationType = 'SIMULATED_DEPOSIT';
+        direction = 'CREDIT';
+        if (txId.includes('_hold') || n.includes('pending')) status = 'PENDING_REVIEW';
+        if (n.includes('rejected')) status = 'REVERSED';
+        if (n.includes('approved') || txId.includes('_release')) status = 'POSTED';
+      } else if (txId.startsWith('tx_sim_trf') || n.includes('transfer')) {
+        operationType = 'INTERNAL_TRANSFER';
+        direction = primaryLine.direction === 'CREDIT' ? 'CREDIT' : 'DEBIT';
+      } else if (txId.includes('fx') || n.includes('fx') || n.includes('conversion')) {
+        operationType = 'FX_CONVERSION';
+        direction = primaryLine.direction === 'CREDIT' ? 'CREDIT' : 'DEBIT';
+      } else if (n.includes('grant')) {
+        operationType = 'GRANT_DISBURSEMENT';
+        direction = 'CREDIT';
+      } else if (n.includes('card') || n.includes('hold')) {
+        operationType = 'CARD_HOLD';
+        direction = 'DEBIT';
+      } else if (n.includes('reversal') || n.includes('compensat')) {
+        operationType = 'COMPENSATING_REVERSAL';
+      } else {
+        // Fallback: liability CREDIT = inflow, DEBIT = outflow
+        operationType = direction === 'CREDIT' ? 'SIMULATED_DEPOSIT' : 'SIMULATED_WITHDRAWAL';
+      }
+
+      let balanceFormatted = '—';
+      if (availId) {
+        try {
+          balanceFormatted = defaultLedgerService.getAccountBalance(availId).formatted;
+        } catch {
+          /* ignore */
+        }
+      }
+
+      const refMatch = entry.narration.match(/\[([A-Z0-9-]+)\]/);
+      const referenceNumber = refMatch?.[1] || txId;
+
+      results.push({
+        transactionId: txId,
+        referenceNumber,
+        operationType,
+        status,
+        currency: entry.currency,
+        amountMinor: amountMinor.toString(),
+        formattedAmount: money.toDisplayString(),
+        journalEntryId: entry.id,
+        idempotencyKey: `ledger_${entry.id}`,
+        isSimulated: true,
+        authoritativeBalance: balanceFormatted,
+        timestamp: entry.postedAt.toISOString(),
+        userId,
+        direction,
+        narration: entry.narration,
+      });
+    }
+
+    return results;
+  }
+
+  private mergeUserTransactionHistory(userId: string): FinancialOperationResult[] {
+    this.syncPendingQueuesIntoHistory();
+    const fromHistory = this.transactionHistory.filter((t) => t.userId === userId);
+    const seenTx = new Set(fromHistory.map((t) => t.transactionId));
+    const seenJournal = new Set(fromHistory.map((t) => t.journalEntryId).filter(Boolean));
+    const seenRefs = new Set(fromHistory.map((t) => `${t.referenceNumber}|${t.operationType}`));
+
+    for (const ledgerTx of this.buildLedgerBackedHistory(userId)) {
+      if (seenTx.has(ledgerTx.transactionId)) continue;
+      if (ledgerTx.journalEntryId && seenJournal.has(ledgerTx.journalEntryId)) continue;
+      const refKey = `${ledgerTx.referenceNumber}|${ledgerTx.operationType}`;
+      if (seenRefs.has(refKey)) continue;
+      fromHistory.push(ledgerTx);
+      seenTx.add(ledgerTx.transactionId);
+      if (ledgerTx.journalEntryId) seenJournal.add(ledgerTx.journalEntryId);
+      seenRefs.add(refKey);
+    }
+
+    fromHistory.sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+    );
+    return fromHistory;
+  }
+
+  /** Backfill history rows for queue items that predate history recording. */
+  private syncPendingQueuesIntoHistory(): void {
+    for (const deposit of this.pendingDeposits) {
+      const existing = this.transactionHistory.find(
+        (t) => t.userId === deposit.userId && t.referenceNumber === deposit.referenceNumber,
+      );
+      if (!existing) {
+        this.recordPendingDepositHistory(
+          deposit,
+          deposit.releaseJournalEntryId || deposit.holdJournalEntryId,
+          `tx_hist_${deposit.id}`,
+        );
+      }
+      if (deposit.status === 'APPROVED') {
+        this.updateHistoryByReference(deposit.userId, deposit.referenceNumber, {
+          status: 'POSTED',
+          journalEntryId: deposit.releaseJournalEntryId || deposit.holdJournalEntryId,
+        });
+      } else if (deposit.status === 'REJECTED') {
+        this.updateHistoryByReference(deposit.userId, deposit.referenceNumber, {
+          status: 'REVERSED',
+          journalEntryId: deposit.releaseJournalEntryId || deposit.holdJournalEntryId,
+        });
+      }
+    }
+
+    for (const withdrawal of this.pendingWithdrawals) {
+      const existing = this.transactionHistory.find(
+        (t) => t.userId === withdrawal.userId && t.referenceNumber === withdrawal.referenceNumber,
+      );
+      if (!existing) {
+        this.recordPendingWithdrawalHistory(
+          withdrawal,
+          withdrawal.releaseJournalEntryId || withdrawal.holdJournalEntryId,
+          `tx_hist_${withdrawal.id}`,
+        );
+      }
+      if (withdrawal.status === 'APPROVED') {
+        this.updateHistoryByReference(withdrawal.userId, withdrawal.referenceNumber, {
+          status: 'POSTED',
+          journalEntryId: withdrawal.releaseJournalEntryId || withdrawal.holdJournalEntryId,
+        });
+      } else if (withdrawal.status === 'REJECTED') {
+        this.updateHistoryByReference(withdrawal.userId, withdrawal.referenceNumber, {
+          status: 'REVERSED',
+          journalEntryId: withdrawal.releaseJournalEntryId || withdrawal.holdJournalEntryId,
+        });
+      }
+    }
+  }
+
   public getUserTransactions(
     userId: string,
     filter?: { currency?: string; type?: string; search?: string }
   ): FinancialOperationResult[] {
-    let txs = this.transactionHistory.filter((t) => t.userId === userId);
+    let txs = this.mergeUserTransactionHistory(userId);
 
     if (filter?.currency && filter.currency !== 'ALL') {
       txs = txs.filter((t) => t.currency.toUpperCase() === filter.currency!.toUpperCase());
@@ -1511,7 +2090,28 @@ export class WalletService {
       throw new Error('Access denied: Staff role required.');
     }
 
-    let list = [...this.transactionHistory];
+    this.syncPendingQueuesIntoHistory();
+    // Merge ledger-backed rows for every distinct customer present in history or ledger.
+    const userIds = new Set<string>();
+    for (const t of this.transactionHistory) {
+      if (t.userId) userIds.add(t.userId);
+    }
+    for (const acc of defaultLedgerService.getAccounts()) {
+      if (acc.userId) userIds.add(acc.userId);
+    }
+    const merged: FinancialOperationResult[] = [];
+    const seen = new Set<string>();
+    for (const uid of userIds) {
+      for (const tx of this.mergeUserTransactionHistory(uid)) {
+        const key = `${tx.transactionId}|${tx.userId}|${tx.journalEntryId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(tx);
+      }
+    }
+    let list = merged.sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+    );
 
     if (params.status && params.status !== 'ALL') {
       list = list.filter((t) => t.status === params.status);

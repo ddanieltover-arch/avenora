@@ -25,6 +25,14 @@ const EnvSchema = z.object({
     .string()
     .default('false')
     .transform((v) => v.toLowerCase() === 'true'),
+  /**
+   * When true, auto-approve KYC and unlock domestic account numbers without review.
+   * Defaults to false — KYC workflow is required. Set explicitly to enable prototype bypass.
+   */
+  BYPASS_KYC_GATES: z
+    .string()
+    .default('false')
+    .transform((v) => v.toLowerCase() === 'true'),
 
   // Database Connection Strings
   DATABASE_URL: z.string().optional().default('postgresql://user:pass@localhost:5432/avenora_dev'),
@@ -101,6 +109,7 @@ export function getSafePublicConfig(config: ValidatedEnv) {
   return {
     environment: config.NODE_ENV,
     prototypeMode: config.PROTOTYPE_MODE,
+    bypassKycGates: Boolean(config.BYPASS_KYC_GATES),
     liveSettlementEnabled: config.ENABLE_LIVE_SETTLEMENT,
     logLevel: config.LOG_LEVEL,
     maskPiiEnabled: config.MASK_PII_IN_LOGS,

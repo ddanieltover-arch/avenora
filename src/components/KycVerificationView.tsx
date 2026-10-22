@@ -3,7 +3,7 @@
  * Avenora Fintech Platform — Customer KYC & Compliance Verification Component
  */
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useId } from 'react';
 import { useAuth } from './AuthContext.tsx';
 import {
   canonicalizeTaxIdType,
@@ -18,6 +18,7 @@ import {
   KYC_PASSPORT_PHOTOGRAPH_OPTION,
   KYC_IDENTITY_IMAGE_ACCEPT,
   KYC_IDENTITY_MAX_FILE_BYTES,
+  isAcceptableKycIdentityImage,
   kycGovernmentIdRequiresFrontAndBack,
   isKycIdentityDocumentType,
   type KycGovernmentIdDocumentType,
@@ -59,6 +60,59 @@ const emptyUploadSlot = (): UploadSlot => ({
   savedLabel: null,
 });
 
+const MAX_REVIEW_PREVIEW_CHARS = 1_600_000;
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Compress image for staff review; omit preview if still too large. */
+async function fileToReviewPreviewDataUrl(file: File): Promise<string | undefined> {
+  try {
+    if (!file.type.startsWith('image/')) {
+      if (file.size > 350_000) return undefined;
+      const raw = await readFileAsDataUrl(file);
+      return raw.length <= MAX_REVIEW_PREVIEW_CHARS ? raw : undefined;
+    }
+
+    const objectUrl = URL.createObjectURL(file);
+    try {
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = () => reject(new Error('Image decode failed'));
+        el.src = objectUrl;
+      });
+      const maxEdge = 1280;
+      const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
+      const width = Math.max(1, Math.round(img.width * scale));
+      const height = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return undefined;
+      ctx.drawImage(img, 0, 0, width, height);
+      let quality = 0.72;
+      let dataUrl = canvas.toDataURL('image/jpeg', quality);
+      while (dataUrl.length > MAX_REVIEW_PREVIEW_CHARS && quality > 0.35) {
+        quality -= 0.12;
+        dataUrl = canvas.toDataURL('image/jpeg', quality);
+      }
+      return dataUrl.length <= MAX_REVIEW_PREVIEW_CHARS ? dataUrl : undefined;
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  } catch {
+    return undefined;
+  }
+}
+
 interface IdentityUploadZoneProps {
   title: string;
   hint: string;
@@ -75,72 +129,73 @@ const IdentityUploadZone: React.FC<IdentityUploadZoneProps> = ({
   inputRef,
   onSelectFile,
   onClear,
-}) => (
-  <div
-    role="button"
-    tabIndex={0}
-    onKeyDown={(event) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        inputRef.current?.click();
-      }
-    }}
-    onDragOver={(event) => event.preventDefault()}
-    onDrop={(event) => {
-      event.preventDefault();
-      onSelectFile(event.dataTransfer.files?.[0] ?? null);
-    }}
-    onClick={() => inputRef.current?.click()}
-    className="cursor-pointer rounded-xl border border-dashed border-slate-700 bg-slate-950 p-5 text-center transition hover:border-cyan-600/50 hover:bg-slate-900/80"
-  >
-    <input
-      ref={inputRef}
-      type="file"
-      accept={KYC_IDENTITY_IMAGE_ACCEPT}
-      className="hidden"
-      onChange={(event) => onSelectFile(event.target.files?.[0] ?? null)}
-    />
+}) => {
+  const inputId = useId();
+  const hasSelection = Boolean(slot.file || slot.previewUrl || slot.savedLabel);
 
-    {slot.previewUrl ? (
-      <div className="space-y-3">
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = event.target.files;
+    const file = selected && selected.length > 0 ? selected.item(0) : null;
+    onSelectFile(file);
+  };
+
+  return (
+    <div className="kyc-upload-zone rounded-xl border border-dashed border-slate-700 bg-slate-950 p-4 space-y-3">
+      <div className="flex items-start gap-3">
+        <UploadCloud className="mt-0.5 h-5 w-5 shrink-0 text-cyan-400" aria-hidden />
+        <div className="min-w-0 text-left">
+          <p className="text-sm font-medium text-white">{title}</p>
+          <p className="mt-0.5 text-[11px] text-slate-400">{hint}</p>
+          <p className="mt-1 text-[10px] text-slate-500">Photos from camera or gallery · Max 10 MB</p>
+        </div>
+      </div>
+
+      {slot.previewUrl && (
         <img
           src={slot.previewUrl}
           alt={title}
-          className="mx-auto max-h-44 rounded-lg border border-slate-800 object-contain"
+          className="mx-auto max-h-40 w-full rounded-lg border border-slate-800 object-contain"
         />
-        <div className="flex flex-wrap items-center justify-center gap-3 text-[11px]">
-          <span className="text-slate-300 font-mono">{slot.file?.name}</span>
-          <span className="text-emerald-400 font-semibold uppercase tracking-wide">Ready to submit</span>
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              onClear();
-            }}
-            className="inline-flex items-center gap-1 rounded-md border border-slate-700 px-2 py-1 text-slate-300 hover:bg-slate-800"
-          >
-            <X className="h-3 w-3" />
-            Remove
-          </button>
+      )}
+
+      {hasSelection && (
+        <div className="flex flex-wrap items-center gap-2 text-[11px]">
+          <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" aria-hidden />
+          <span className="font-mono text-slate-200 break-all">
+            {slot.file?.name || slot.savedLabel}
+          </span>
+          <span className="font-semibold uppercase tracking-wide text-emerald-400">Ready</span>
         </div>
-      </div>
-    ) : slot.savedLabel ? (
-      <div className="space-y-2">
-        <CheckCircle2 className="mx-auto h-8 w-8 text-emerald-400" />
-        <p className="text-sm font-medium text-white">Document on file</p>
-        <p className="text-[11px] text-slate-400 font-mono">{slot.savedLabel}</p>
-        <p className="text-[11px] text-cyan-300">Click or drop a new image to replace.</p>
-      </div>
-    ) : (
-      <div className="space-y-2">
-        <UploadCloud className="mx-auto h-8 w-8 text-cyan-400" />
-        <p className="text-sm font-medium text-white">{title}</p>
-        <p className="text-[11px] text-slate-400">{hint}</p>
-        <p className="text-[10px] text-slate-500">JPEG, PNG, or WebP · Max 10 MB</p>
-      </div>
-    )}
-  </div>
-);
+      )}
+
+      {/*
+        Visible native file control — required for reliable mobile (Android Chrome / iOS).
+        Do not use opacity-0 overlays; they miss taps inside scroll containers on phones.
+        No capture= attribute — that forces camera-only and blocks gallery on many devices.
+      */}
+      <input
+        id={inputId}
+        ref={inputRef}
+        name={`kyc-upload-${inputId}`}
+        type="file"
+        accept={KYC_IDENTITY_IMAGE_ACCEPT}
+        onChange={handleFileChange}
+        className="kyc-file-input"
+      />
+
+      {hasSelection && (
+        <button
+          type="button"
+          onClick={onClear}
+          className="inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-lg border border-slate-700 px-4 py-2.5 text-xs text-slate-300 cursor-pointer"
+        >
+          <X className="h-3.5 w-3.5" />
+          Remove photo
+        </button>
+      )}
+    </div>
+  );
+};
 
 export const KycVerificationView: React.FC = () => {
   const { user, token, refreshUser } = useAuth();
@@ -172,6 +227,13 @@ export const KycVerificationView: React.FC = () => {
   const govFrontInputRef = useRef<HTMLInputElement>(null);
   const govBackInputRef = useRef<HTMLInputElement>(null);
   const passportPhotoInputRef = useRef<HTMLInputElement>(null);
+  const uploadSectionRef = useRef<HTMLDivElement>(null);
+
+  const focusUploadSection = () => {
+    window.setTimeout(() => {
+      uploadSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 50);
+  };
 
   const activeTaxIdOption =
     taxIdOptions.find((option) => option.value === taxIdType) ?? taxIdOptions[0];
@@ -312,19 +374,6 @@ export const KycVerificationView: React.FC = () => {
 
   const governmentIdNeedsFrontAndBack = kycGovernmentIdRequiresFrontAndBack(selectedGovernmentIdType);
 
-  const validateIdentityImage = (file: File | null): boolean => {
-    if (!file) return false;
-    if (!file.type.startsWith('image/')) {
-      setFeedback({ success: false, message: 'Please upload a JPEG, PNG, or WebP image.' });
-      return false;
-    }
-    if (file.size > KYC_IDENTITY_MAX_FILE_BYTES) {
-      setFeedback({ success: false, message: 'Image must be 10 MB or smaller.' });
-      return false;
-    }
-    return true;
-  };
-
   const clearUploadSlot = (
     setSlot: React.Dispatch<React.SetStateAction<UploadSlot>>,
     inputRef: React.RefObject<HTMLInputElement | null>,
@@ -345,29 +394,45 @@ export const KycVerificationView: React.FC = () => {
     inputRef: React.RefObject<HTMLInputElement | null>,
     file: File | null,
   ) => {
+    if (!file) {
+      clearUploadSlot(setSlot, inputRef);
+      return;
+    }
+
+    if (file.size > KYC_IDENTITY_MAX_FILE_BYTES) {
+      setFeedback({ success: false, message: 'Image must be 10 MB or smaller.' });
+      if (inputRef.current) inputRef.current.value = '';
+      return;
+    }
+
+    if (!isAcceptableKycIdentityImage(file)) {
+      setFeedback({
+        success: false,
+        message: 'Please choose a photo from your camera or gallery (JPEG, PNG, WebP, or HEIC).',
+      });
+      if (inputRef.current) inputRef.current.value = '';
+      return;
+    }
+
+    let previewUrl: string | null = null;
+    try {
+      previewUrl = URL.createObjectURL(file);
+    } catch {
+      // Some mobile formats still upload without a browser preview.
+      previewUrl = null;
+    }
+
+    setFeedback(null);
     setSlot((current) => {
       if (current.previewUrl) {
         URL.revokeObjectURL(current.previewUrl);
       }
-      if (!file) {
-        return emptyUploadSlot();
-      }
-      if (!validateIdentityImage(file)) {
-        if (inputRef.current) {
-          inputRef.current.value = '';
-        }
-        return current;
-      }
-      setFeedback(null);
       return {
         file,
-        previewUrl: URL.createObjectURL(file),
+        previewUrl,
         savedLabel: null,
       };
     });
-    if (!file && inputRef.current) {
-      inputRef.current.value = '';
-    }
   };
 
   const clearGovernmentIdUploads = () => {
@@ -378,47 +443,51 @@ export const KycVerificationView: React.FC = () => {
 
   const slotHasFile = (slot: UploadSlot) => Boolean(slot.file || slot.savedLabel);
 
-  const buildDocumentPayload = () => {
+  const buildDocumentPayload = async () => {
     const documents: Array<{
       type: KycIdentityDocumentType;
       fileName: string;
       mimeType: string;
       fileSize: number;
+      previewDataUrl?: string;
     }> = [];
+
+    const pushDoc = async (
+      type: KycIdentityDocumentType,
+      file: File,
+      fileName: string
+    ) => {
+      const previewDataUrl = await fileToReviewPreviewDataUrl(file);
+      documents.push({
+        type,
+        fileName,
+        mimeType: file.type || 'image/jpeg',
+        fileSize: file.size,
+        ...(previewDataUrl ? { previewDataUrl } : {}),
+      });
+    };
 
     if (governmentIdNeedsFrontAndBack) {
       if (govFrontSlot.file) {
-        documents.push({
-          type: selectedGovernmentIdType,
-          fileName: `${selectedGovernmentIdType}_FRONT_${govFrontSlot.file.name}`,
-          mimeType: govFrontSlot.file.type || 'image/jpeg',
-          fileSize: govFrontSlot.file.size,
-        });
+        await pushDoc(
+          selectedGovernmentIdType,
+          govFrontSlot.file,
+          `${selectedGovernmentIdType}_FRONT_${govFrontSlot.file.name}`
+        );
       }
       if (govBackSlot.file) {
-        documents.push({
-          type: selectedGovernmentIdType,
-          fileName: `${selectedGovernmentIdType}_BACK_${govBackSlot.file.name}`,
-          mimeType: govBackSlot.file.type || 'image/jpeg',
-          fileSize: govBackSlot.file.size,
-        });
+        await pushDoc(
+          selectedGovernmentIdType,
+          govBackSlot.file,
+          `${selectedGovernmentIdType}_BACK_${govBackSlot.file.name}`
+        );
       }
     } else if (govSingleSlot.file) {
-      documents.push({
-        type: selectedGovernmentIdType,
-        fileName: govSingleSlot.file.name,
-        mimeType: govSingleSlot.file.type || 'image/jpeg',
-        fileSize: govSingleSlot.file.size,
-      });
+      await pushDoc(selectedGovernmentIdType, govSingleSlot.file, govSingleSlot.file.name);
     }
 
     if (passportPhotoSlot.file) {
-      documents.push({
-        type: 'PASSPORT_PHOTOGRAPH',
-        fileName: passportPhotoSlot.file.name,
-        mimeType: passportPhotoSlot.file.type || 'image/jpeg',
-        fileSize: passportPhotoSlot.file.size,
-      });
+      await pushDoc('PASSPORT_PHOTOGRAPH', passportPhotoSlot.file, passportPhotoSlot.file.name);
     }
 
     return documents;
@@ -442,25 +511,28 @@ export const KycVerificationView: React.FC = () => {
           success: false,
           message: `Please upload both front and back images for your ${activeGovernmentIdOption.label}.`,
         });
+        focusUploadSection();
         return;
       }
     } else if (!slotHasFile(govSingleSlot)) {
       setFeedback({
         success: false,
-        message: `Please upload an image for your ${activeGovernmentIdOption.label}.`,
+        message: `Please upload an image for your ${activeGovernmentIdOption.label}. Scroll down and use Choose File.`,
       });
+      focusUploadSection();
       return;
     }
 
     if (!slotHasFile(passportPhotoSlot)) {
       setFeedback({
         success: false,
-        message: 'Please upload your passport-style photograph.',
+        message: 'Please upload your passport-style photograph. Scroll to the photo section and use Choose File.',
       });
+      focusUploadSection();
       return;
     }
 
-    const documents = buildDocumentPayload();
+    const documents = await buildDocumentPayload();
 
     try {
       const res = await fetch('/api/v1/kyc/submit', {
@@ -485,8 +557,8 @@ export const KycVerificationView: React.FC = () => {
       });
       const data = await res.json();
       if (res.ok) {
-        setFeedback({ success: true, message: 'Verification details submitted for compliance review.' });
-        fetchProfile();
+        setFeedback(null);
+        await fetchProfile();
         refreshUser();
       } else {
         setFeedback({ success: false, message: data.detail || 'Submission failed' });
@@ -525,18 +597,27 @@ export const KycVerificationView: React.FC = () => {
     }
   };
 
+  const kycStatus = profile?.status || user?.kycStatus || 'NOT_STARTED';
+  const isPendingReview = kycStatus === 'SUBMITTED' || kycStatus === 'UNDER_REVIEW';
+  const isApproved = kycStatus === 'APPROVED';
+  const canEditForm =
+    kycStatus === 'NOT_STARTED' ||
+    kycStatus === 'IN_PROGRESS' ||
+    kycStatus === 'REJECTED' ||
+    kycStatus === 'NEEDS_MORE_INFORMATION';
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'APPROVED':
         return (
-          <span className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-brand-accent-light0/10 text-emerald-400 border border-emerald-500/30">
+          <span className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-brand-accent/10 text-brand-accent border border-brand-accent/30">
             <CheckCircle2 className="w-3.5 h-3.5" /> VERIFIED (APPROVED)
           </span>
         );
       case 'SUBMITTED':
       case 'UNDER_REVIEW':
         return (
-          <span className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
+          <span className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-brand-accent/10 text-brand-accent border border-brand-accent/30">
             <Clock className="w-3.5 h-3.5" /> UNDER COMPLIANCE REVIEW
           </span>
         );
@@ -564,10 +645,10 @@ export const KycVerificationView: React.FC = () => {
   return (
     <div className="space-y-6 pb-6">
       {/* Overview & Status Banner */}
-      <div className="bg-slate-900/90 rounded-2xl border border-slate-800 p-6 shadow-xl space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-800 gap-4">
+      <div className="portal-dark-panel p-6 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-brand-primary/25 gap-4">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-purple-500/10 border border-purple-500/20 text-purple-400">
+            <div className="p-2.5 portal-dark-icon">
               <ShieldCheck className="w-5 h-5" />
             </div>
             <div>
@@ -580,29 +661,63 @@ export const KycVerificationView: React.FC = () => {
             </div>
           </div>
 
-          <div>{getStatusBadge(profile?.status || user?.kycStatus || 'NOT_STARTED')}</div>
+          <div>{getStatusBadge(kycStatus)}</div>
         </div>
 
-        {/* Feedback message */}
-        {feedback && (
-          <div
-            className={`p-3 rounded-xl border text-xs ${
-              feedback.success
-                ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-300'
-                : 'bg-rose-950/30 border-rose-500/40 text-rose-300'
-            }`}
-          >
+        {feedback && !feedback.success && (
+          <div className="p-3 rounded-xl border text-xs bg-rose-950/30 border-rose-500/40 text-rose-300">
             {feedback.message}
           </div>
         )}
       </div>
 
-      {/* Verification Submission Form (Customer View) */}
-      <div className="bg-slate-900/90 rounded-2xl border border-slate-800 p-6 shadow-xl space-y-4">
+      {/* Customer verification area: form OR pending OR approved */}
+      <div className="portal-dark-panel p-6 space-y-4">
+        {isApproved && (
+          <div className="rounded-xl border border-brand-accent/40 bg-brand-deep/40 p-6 sm:p-8 text-center space-y-3">
+            <div className="mx-auto w-12 h-12 rounded-full flex items-center justify-center portal-dark-icon">
+              <CheckCircle2 className="w-6 h-6" aria-hidden />
+            </div>
+            <h3 className="text-base font-semibold text-brand-accent">Identity verified</h3>
+            <p className="text-sm text-brand-accent/90 max-w-md mx-auto leading-relaxed">
+              Your KYC verification has been approved. You now have full access to identity-gated
+              account features, including simulated domestic account details on your dashboard.
+            </p>
+          </div>
+        )}
+
+        {isPendingReview && (
+          <div className="rounded-xl border border-brand-accent/45 bg-brand-deep/35 p-6 sm:p-8 text-center space-y-3">
+            <div className="mx-auto w-12 h-12 rounded-full flex items-center justify-center portal-dark-icon">
+              <Clock className="w-6 h-6" aria-hidden />
+            </div>
+            <h3 className="text-base font-semibold text-brand-accent">
+              Verification details submitted for compliance review.
+            </h3>
+            <p className="text-sm text-brand-accent/85 max-w-md mx-auto leading-relaxed">
+              Your documents and personal details are with our compliance team. You do not need to
+              resubmit while this review is in progress. We will update this page when a decision is made.
+            </p>
+          </div>
+        )}
+
+        {canEditForm && (
+          <>
         <h3 className="text-sm font-bold text-white flex items-center gap-2">
-          <FileText className="w-4 h-4 text-cyan-400" />
-          Submit or Update Verification Details
+          <FileText className="w-4 h-4 text-brand-accent" />
+          {kycStatus === 'REJECTED' || kycStatus === 'NEEDS_MORE_INFORMATION'
+            ? 'Update and resubmit verification details'
+            : 'Submit verification details'}
         </h3>
+
+        {(kycStatus === 'REJECTED' || kycStatus === 'NEEDS_MORE_INFORMATION') && (
+          <div className="p-3 rounded-xl border border-amber-500/35 bg-amber-950/25 text-amber-100 text-xs leading-relaxed">
+            {kycStatus === 'REJECTED'
+              ? profile?.rejectionReason ||
+                'Your previous submission was not approved. Please correct your details and documents, then submit again.'
+              : 'Additional information is required. Please update the fields below and resubmit your verification.'}
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-4 text-xs">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -690,11 +805,16 @@ export const KycVerificationView: React.FC = () => {
             />
           </div>
 
-          <div className="space-y-4 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+          <div
+            ref={uploadSectionRef}
+            id="kyc-document-uploads"
+            className="space-y-4 rounded-xl border border-cyan-700/40 bg-slate-950/60 p-4"
+          >
             <div>
               <span className="font-semibold text-white block text-sm">Government ID document</span>
               <p className="text-[11px] text-slate-400 mt-1">
-                Choose the ID you are submitting, then upload clear images below.
+                Choose the ID you are submitting, then tap <span className="text-cyan-300 font-semibold">Choose File</span> to
+                upload from your camera or gallery.
               </p>
             </div>
 
@@ -785,17 +905,15 @@ export const KycVerificationView: React.FC = () => {
           <div className="flex justify-center pt-2">
             <button
               type="submit"
-              disabled={
-                profile?.status === 'UNDER_REVIEW' ||
-                profile?.status === 'APPROVED' ||
-                taxIdOptions.length === 0
-              }
-              className="px-5 py-2.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white font-medium text-xs shadow-md transition"
+              disabled={taxIdOptions.length === 0}
+              className="px-5 py-2.5 rounded-lg bg-brand-primary hover:bg-brand-deep disabled:opacity-50 text-white font-medium text-xs shadow-md transition"
             >
               Submit for Compliance Verification
             </button>
           </div>
         </form>
+          </>
+        )}
       </div>
 
       {/* COMPLIANCE DECISION CONSOLE (Staff Only) */}

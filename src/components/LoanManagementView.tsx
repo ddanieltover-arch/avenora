@@ -328,12 +328,12 @@ export function LoanManagementView() {
           onClick={() => setActiveSubTab('officer')}
           className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition ${
             activeSubTab === 'officer'
-              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-950'
+              ? 'bg-brand-primary text-white shadow-md'
               : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
           }`}
         >
           <ShieldCheck className="w-4 h-4" />
-          Underwriting Review {isStaff && <span className="px-1.5 py-0.5 rounded-full bg-indigo-500/30 text-[10px]">Staff</span>}
+          Underwriting Review {isStaff && <span className="px-1.5 py-0.5 rounded-full bg-brand-accent/30 text-[10px]">Staff</span>}
         </button>
       </div>
 
@@ -344,7 +344,7 @@ export function LoanManagementView() {
             {/* Input Controls */}
             <div className="lg:col-span-1 bg-slate-900 border border-slate-800 p-6 rounded-2xl space-y-5">
               <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <Calculator className="w-5 h-5 text-cyan-400" />
+                <Calculator className="w-5 h-5 text-brand-accent" />
                 Loan Parameters
               </h3>
 
@@ -367,7 +367,7 @@ export function LoanManagementView() {
                 <div>
                   <div className="flex justify-between items-center mb-1">
                     <label className="text-slate-400">Principal Amount</label>
-                    <span className="font-mono text-cyan-400 font-bold">
+                    <span className="font-mono text-brand-accent font-bold">
                       {calcCurrencyMeta.symbol}
                       {Number(calcPrincipal).toLocaleString()}
                     </span>
@@ -392,7 +392,7 @@ export function LoanManagementView() {
                 <div>
                   <div className="flex justify-between items-center mb-1">
                     <label className="text-slate-400">Annual Interest Rate (APR)</label>
-                    <span className="font-mono text-cyan-400 font-bold">{calcRate}%</span>
+                    <span className="font-mono text-brand-accent font-bold">{calcRate}%</span>
                   </div>
                   <input
                     type="range"
@@ -413,7 +413,7 @@ export function LoanManagementView() {
                 <div>
                   <div className="flex justify-between items-center mb-1">
                     <label className="text-slate-400">Repayment Term</label>
-                    <span className="font-mono text-cyan-400 font-bold">{calcTerm} Months ({calcTerm / 12} yrs)</span>
+                    <span className="font-mono text-brand-accent font-bold">{calcTerm} Months ({calcTerm / 12} yrs)</span>
                   </div>
                   <div className="grid grid-cols-4 gap-1.5 mt-2">
                     {[6, 12, 24, 36, 48, 60, 84, 120].map((tMonths) => (
@@ -441,9 +441,9 @@ export function LoanManagementView() {
                 <h3 className="text-base font-bold text-white mb-4">Repayment Projection</h3>
                 {calcResult ? (
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div className="p-4 rounded-xl bg-slate-950 border border-cyan-500/30">
+                    <div className="p-4 rounded-xl bg-slate-950 border border-brand-primary/35">
                       <span className="text-[11px] text-slate-400 block font-medium">Estimated Monthly Payment</span>
-                      <span className="text-2xl font-black text-cyan-400 font-mono mt-1 block">
+                      <span className="text-2xl font-black text-brand-accent font-mono mt-1 block">
                         {calcResult.formattedMonthlyPayment}
                       </span>
                       <span className="text-[10px] text-slate-500 mt-1 block">Fixed monthly annuity</span>
@@ -481,7 +481,7 @@ export function LoanManagementView() {
                 </p>
                 <button
                   onClick={() => setShowFullSchedule(!showFullSchedule)}
-                  className="inline-flex items-center gap-1 text-cyan-400 hover:text-cyan-300 text-xs font-semibold pt-1"
+                  className="inline-flex items-center gap-1 text-brand-accent hover:text-brand-accent text-xs font-semibold pt-1"
                 >
                   {showFullSchedule ? 'Hide Full Installment Schedule' : `View Full ${calcTerm}-Month Amortization Schedule`}
                   {showFullSchedule ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -564,7 +564,7 @@ export function LoanManagementView() {
                       : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
                   }`}
                 >
-                  <User className="w-5 h-5 text-cyan-400 shrink-0 mt-0.5" />
+                  <User className="w-5 h-5 text-brand-accent shrink-0 mt-0.5" />
                   <div>
                     <span className="font-bold block text-sm">Personal Loan</span>
                     <span className="text-[11px] text-slate-400">For home improvements, education, or personal debt consolidation.</span>
@@ -580,7 +580,7 @@ export function LoanManagementView() {
                       : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
                   }`}
                 >
-                  <Building2 className="w-5 h-5 text-cyan-400 shrink-0 mt-0.5" />
+                  <Building2 className="w-5 h-5 text-brand-accent shrink-0 mt-0.5" />
                   <div>
                     <span className="font-bold block text-sm">Small-Business Loan</span>
                     <span className="text-[11px] text-slate-400">Working capital, digital inventory, or equipment acquisition.</span>
@@ -753,7 +753,7 @@ export function LoanManagementView() {
                     }`}
                   >
                     <div className="flex justify-between items-start mb-1">
-                      <span className="font-mono text-[11px] text-cyan-400 font-bold">{app.id}</span>
+                      <span className="font-mono text-[11px] text-brand-accent font-bold">{app.id}</span>
                       <span
                         className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                           app.status === 'APPROVED_FOR_DEMO'
@@ -787,7 +787,7 @@ export function LoanManagementView() {
                 <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 border-b border-slate-800 pb-4">
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="font-mono font-bold text-cyan-400 text-sm">{selectedApp.id}</span>
+                      <span className="font-mono font-bold text-brand-accent text-sm">{selectedApp.id}</span>
                       <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-[10px] font-bold">
                         {selectedApp.type}
                       </span>
@@ -845,10 +845,10 @@ export function LoanManagementView() {
                 </div>
 
                 {selectedApp.assessment ? (
-                  <div className="p-5 rounded-2xl bg-gradient-to-br from-slate-950 to-slate-900 border border-cyan-500/30 space-y-4">
+                  <div className="p-5 rounded-2xl bg-gradient-to-br from-slate-950 to-slate-900 border border-brand-primary/35 space-y-4">
                     <div className="flex justify-between items-center">
                       <div className="flex items-center gap-2">
-                        <ShieldCheck className="w-5 h-5 text-cyan-400" />
+                        <ShieldCheck className="w-5 h-5 text-brand-accent" />
                         <span className="font-bold text-white text-sm">Credit risk assessment</span>
                       </div>
                       <span className="text-[10px] font-mono text-slate-400">Ruleset: {selectedApp.assessment.rulesetVersion}</span>
@@ -857,7 +857,7 @@ export function LoanManagementView() {
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                       <div className="p-3 rounded-xl bg-slate-900 border border-slate-800">
                         <span className="text-[10px] text-slate-400 block">Credit score</span>
-                        <span className="text-2xl font-black text-cyan-400 font-mono mt-0.5 block">
+                        <span className="text-2xl font-black text-brand-accent font-mono mt-0.5 block">
                           {selectedApp.assessment.syntheticScore}
                         </span>
                         <span className="text-[10px] text-slate-500">Range: 300 – 850</span>
@@ -905,7 +905,7 @@ export function LoanManagementView() {
 
                 {/* Officer Underwriting Action Panel (Enforces Separation of Duties) */}
                 {activeSubTab === 'officer' && (
-                  <div className="p-5 rounded-2xl bg-indigo-950/20 border border-indigo-500/30 space-y-4">
+                  <div className="p-5 rounded-2xl bg-brand-deep/40 border border-brand-primary/35 space-y-4">
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-white text-sm flex items-center gap-2">
                         <ShieldCheck className="w-4 h-4 text-indigo-400" />
@@ -950,7 +950,7 @@ export function LoanManagementView() {
                         <button
                           onClick={() => handleReviewDecision(selectedApp.id)}
                           disabled={reviewSubmitting}
-                          className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold transition text-xs shadow-md shadow-indigo-950 disabled:opacity-50"
+                          className="px-4 py-2 rounded-xl bg-brand-primary hover:bg-brand-deep text-white font-bold transition text-xs shadow-md disabled:opacity-50"
                         >
                           {reviewSubmitting ? 'Recording Decision...' : 'Commit Underwriting Decision to Audit Trail'}
                         </button>

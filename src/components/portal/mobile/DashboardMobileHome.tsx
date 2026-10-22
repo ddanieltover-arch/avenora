@@ -16,17 +16,16 @@ import {
 import { formatOperationTypeLabel } from '../../../lib/operationDisplay.ts';
 import type { PortalCardSummary, PortalTransactionSummary } from '../../../hooks/usePortalDashboardData.ts';
 import type { WalletAccountLike } from '../../../hooks/useCustomerWalletScope.ts';
+import type { WalletDeepLinkModal } from '../../WalletView.tsx';
 import { DomesticBankAccountCard } from '../DomesticBankAccountCard.tsx';
 import {
   ArrowDownLeft,
-  ArrowRightLeft,
   ArrowUpRight,
   ChevronRight,
   Eye,
   EyeOff,
-  Globe,
   Printer,
-  RefreshCw,
+  Mail,
   ShieldCheck,
   Wallet,
   CreditCard,
@@ -49,6 +48,7 @@ interface DashboardMobileHomeProps {
   error: string | null;
   onRetry: () => void;
   onTabChange: (tab: PortalTabId) => void;
+  onOpenWalletModal?: (modal: WalletDeepLinkModal) => void;
 }
 
 function txDirection(tx: PortalTransactionSummary): 'in' | 'out' {
@@ -64,7 +64,6 @@ function txDirection(tx: PortalTransactionSummary): 'in' | 'out' {
 
 export const DashboardMobileHome: React.FC<DashboardMobileHomeProps> = ({
   user,
-  primaryFiat,
   primaryFiatBalanceDisplay,
   primaryFiatBtcEquivalentDisplay,
   primaryFiatHoldDisplay,
@@ -76,8 +75,9 @@ export const DashboardMobileHome: React.FC<DashboardMobileHomeProps> = ({
   transactions,
   loading,
   error,
-  onRetry,
+  onRetry: _onRetry,
   onTabChange,
+  onOpenWalletModal,
 }) => {
   const [balanceVisible, setBalanceVisible] = useState(true);
   const greeting = timeOfDayGreeting();
@@ -90,11 +90,27 @@ export const DashboardMobileHome: React.FC<DashboardMobileHomeProps> = ({
     [transactions],
   );
 
-  const quickActions = [
-    { label: 'Transfer', icon: ArrowRightLeft, tab: 'transfers' as PortalTabId, tint: 'bg-[#E8F6F2] text-[#075B46]' },
-    { label: 'Exchange', icon: Globe, tab: 'wallets' as PortalTabId, tint: 'bg-teal-50 text-teal-800' },
-    { label: 'Wallets', icon: Wallet, tab: 'wallets' as PortalTabId, tint: 'bg-emerald-50 text-emerald-800' },
-    { label: 'Statements', icon: Printer, tab: 'statements' as PortalTabId, tint: 'bg-indigo-50 text-indigo-800' },
+  const quickActions: Array<{
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    tint: string;
+    tab?: PortalTabId;
+    walletModal?: WalletDeepLinkModal;
+  }> = [
+    { label: 'Wallets', icon: Wallet, tab: 'wallets', tint: 'bg-emerald-50 text-emerald-800' },
+    {
+      label: 'Deposit',
+      icon: ArrowDownLeft,
+      walletModal: 'deposit',
+      tint: 'bg-[#E8F6F2] text-[#075B46]',
+    },
+    {
+      label: 'Withdraw',
+      icon: ArrowUpRight,
+      walletModal: 'withdraw',
+      tint: 'bg-teal-50 text-teal-800',
+    },
+    { label: 'Statements', icon: Printer, tab: 'statements', tint: 'bg-indigo-50 text-indigo-800' },
   ];
 
   if (loading) {
@@ -116,14 +132,13 @@ export const DashboardMobileHome: React.FC<DashboardMobileHomeProps> = ({
       {error && (
         <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-900 flex items-center justify-between gap-2">
           <span>{error}</span>
-          <button
-            type="button"
-            onClick={onRetry}
-            className="shrink-0 font-semibold text-rose-800 flex items-center gap-1 cursor-pointer"
+          <a
+            href="mailto:support@avenorabank.com?subject=Account%20suspension%20support"
+            className="shrink-0 font-semibold text-rose-800 flex items-center gap-1 rounded-lg bg-white border border-rose-200 px-2.5 py-1.5"
           >
-            <RefreshCw className="w-3.5 h-3.5" aria-hidden />
-            Retry
-          </button>
+            <Mail className="w-3.5 h-3.5" aria-hidden />
+            Email support
+          </a>
         </div>
       )}
 
@@ -139,7 +154,6 @@ export const DashboardMobileHome: React.FC<DashboardMobileHomeProps> = ({
             <h2 id="mobile-balance-heading" className="font-serif font-bold text-lg leading-tight">
               Available balance
             </h2>
-            <p className="text-[10px] text-emerald-100/80 mt-0.5">Primary wallet · {primaryFiat}</p>
           </div>
           <button
             type="button"
@@ -150,22 +164,34 @@ export const DashboardMobileHome: React.FC<DashboardMobileHomeProps> = ({
             {balanceVisible ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
           </button>
         </div>
-        <p className="text-3xl font-serif font-bold tabular-nums tracking-tight" data-financial-amount="true">
+        <p className="text-3xl font-serif font-bold tabular-nums tracking-tight text-white" data-financial-amount="true">
           {balanceVisible ? primaryFiatBalanceDisplay : '••••••'}
         </p>
         <p className="text-xs text-emerald-100/90 mt-2 tabular-nums" data-financial-amount="true">
           ≈ {balanceVisible ? primaryFiatBtcEquivalentDisplay : '••••'}
-          <span className="text-emerald-100/70"> · illustrative FX</span>
         </p>
         {primaryFiatHasHold && primaryFiatHoldDisplay && (
           <p className="text-[11px] text-amber-100/95 mt-2 tabular-nums" data-financial-amount="true">
             Hold (pending): {balanceVisible ? primaryFiatHoldDisplay : '••••'}
           </p>
         )}
-        {walletsSummary.length > 1 && (
-          <p className="text-[10px] text-emerald-100/75 mt-2">
-            {walletsSummary.length} currencies · balances shown separately (no combined FX total)
-          </p>
+        {walletsSummary.length > 0 && (
+          <ul className="mt-3 space-y-1.5">
+            {walletsSummary.map((account, idx) => {
+              const code = (account.currency || account.currencyCode || '').toUpperCase();
+              return (
+                <li
+                  key={`${code}-${idx}`}
+                  className="rounded-xl bg-white/10 border border-white/20 px-3 py-2 flex items-center justify-between gap-2"
+                >
+                  <span className="text-[11px] font-semibold text-emerald-50">{code || '—'}</span>
+                  <span className="text-sm font-serif font-bold text-white tabular-nums" data-financial-amount="true">
+                    {balanceVisible ? formatWalletAccountBalance(account) : '••••'}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
         )}
       </section>
 
@@ -177,7 +203,13 @@ export const DashboardMobileHome: React.FC<DashboardMobileHomeProps> = ({
               <button
                 key={action.label}
                 type="button"
-                onClick={() => onTabChange(action.tab)}
+                onClick={() => {
+                  if (action.walletModal && onOpenWalletModal) {
+                    onOpenWalletModal(action.walletModal);
+                    return;
+                  }
+                  if (action.tab) onTabChange(action.tab);
+                }}
                 className="flex flex-col items-center gap-1.5 py-2 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#19A77A]/40 rounded-2xl"
               >
                 <span className={`w-11 h-11 rounded-2xl flex items-center justify-center ${action.tint}`}>
@@ -189,6 +221,8 @@ export const DashboardMobileHome: React.FC<DashboardMobileHomeProps> = ({
           })}
         </div>
       </section>
+
+      <DomesticBankAccountCard onNavigateToKyc={() => onTabChange('kyc')} />
 
       <section className="bg-white rounded-3xl border border-[#E2E8E4]/80 shadow-sm p-4">
         <div className="flex items-center justify-between mb-3">
@@ -277,9 +311,6 @@ export const DashboardMobileHome: React.FC<DashboardMobileHomeProps> = ({
                       {formatWalletAccountBalance(account)}
                     </span>
                   </div>
-                  {account.accountNumber && (
-                    <p className="font-mono text-[10px] text-[#68746E] break-all">{account.accountNumber}</p>
-                  )}
                   {onHold && (
                     <p className="text-[10px] text-amber-800 tabular-nums">
                       Hold: {formatWalletAccountHold(account)}
@@ -291,8 +322,6 @@ export const DashboardMobileHome: React.FC<DashboardMobileHomeProps> = ({
           </ul>
         )}
       </section>
-
-      <DomesticBankAccountCard onNavigateToKyc={() => onTabChange('kyc')} />
 
       <div className="grid grid-cols-2 gap-3">
         <button

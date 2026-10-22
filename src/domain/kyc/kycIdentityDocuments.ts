@@ -59,9 +59,25 @@ export function kycGovernmentIdRequiresFrontAndBack(
   return type === 'NATIONAL_ID' || type === 'DRIVERS_LICENSE';
 }
 
-export const KYC_IDENTITY_IMAGE_ACCEPT = 'image/jpeg,image/png,image/webp';
+/**
+ * Keep accept simple — iOS/Android gallery pickers are most reliable with `image/*`.
+ * Extra MIME/extension tokens can cause some mobile browsers to show an empty picker.
+ */
+export const KYC_IDENTITY_IMAGE_ACCEPT = 'image/*';
 
 export const KYC_IDENTITY_MAX_FILE_BYTES = 10 * 1024 * 1024;
+
+const IDENTITY_IMAGE_NAME_RE = /\.(jpe?g|png|webp|heic|heif|gif|bmp|tif{1,2})$/i;
+
+/** True when the file looks like a usable identity photo (tolerant of empty MIME on mobile). */
+export function isAcceptableKycIdentityImage(file: File): boolean {
+  if (!file || file.size <= 0) return false;
+  if (file.size > KYC_IDENTITY_MAX_FILE_BYTES) return false;
+  if (file.type.startsWith('image/')) return true;
+  if (IDENTITY_IMAGE_NAME_RE.test(file.name || '')) return true;
+  // Camera/gallery picks on some WebViews omit MIME type entirely.
+  return !file.type;
+}
 
 export function isKycIdentityDocumentType(value: string): value is KycIdentityDocumentType {
   return (KYC_IDENTITY_DOCUMENT_TYPES as readonly string[]).includes(value);

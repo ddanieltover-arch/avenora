@@ -89,12 +89,13 @@ export function usePortalDashboardData({
 
     try {
       const headers = { Authorization: `Bearer ${token}` };
+      const fetchOpts: RequestInit = { headers, credentials: 'include', cache: 'no-store' };
       const [wRes, cRes, lRes, gRes, tRes] = await Promise.all([
-        fetch('/api/v1/wallets/me', { headers }),
-        fetch('/api/v1/cards', { headers }),
-        fetch('/api/v1/loans/applications', { headers }),
-        fetch('/api/v1/grants/applications', { headers }),
-        fetch('/api/v1/wallets/transactions', { headers }),
+        fetch('/api/v1/wallets/me', fetchOpts),
+        fetch('/api/v1/cards', fetchOpts),
+        fetch('/api/v1/loans/applications', fetchOpts),
+        fetch('/api/v1/grants/applications', fetchOpts),
+        fetch('/api/v1/wallets/transactions', fetchOpts),
       ]);
 
       if (fetchGenerationRef.current !== generation) {
@@ -104,6 +105,8 @@ export function usePortalDashboardData({
       if (wRes.ok) {
         const wData = await wRes.json();
         setWalletsSummary(filterWalletAccounts(wData.wallet?.accounts || [], walletCurrencyCodes));
+      } else {
+        setWalletsSummary([]);
       }
 
       if (cRes.ok) {
@@ -126,12 +129,12 @@ export function usePortalDashboardData({
         setTransactions(tData.transactions || []);
       }
 
-      if (!wRes.ok && !tRes.ok) {
-        setError('Unable to load account data. Please try again.');
+      if (!wRes.ok) {
+        setError('Unable to load account data. Please try again or contact support@avenorabank.com.');
       }
     } catch {
       if (fetchGenerationRef.current === generation) {
-        setError('Unable to load account data. Please try again.');
+        setError('Unable to load account data. Please try again or contact support@avenorabank.com.');
       }
     } finally {
       if (fetchGenerationRef.current === generation) {

@@ -9,7 +9,6 @@ import type { AuthUser } from '../../AuthContext.tsx';
 import { useLocalization } from '../../LocalizationContext.tsx';
 import { customerInitials } from '../../../lib/walletDisplay.ts';
 import {
-  ArrowRightLeft,
   Award,
   ChevronRight,
   FileText,
@@ -62,13 +61,6 @@ export const PortalMobileProfileHub: React.FC<PortalMobileProfileHubProps> = ({
       sub: (user?.kycStatus || 'NOT_STARTED').replace(/_/g, ' '),
       icon: UserCheck,
       action: () => onTabChange('kyc'),
-    },
-    {
-      id: 'transfers',
-      label: 'Transfers',
-      sub: 'Simulated corridors',
-      icon: ArrowRightLeft,
-      action: () => onTabChange('transfers'),
     },
     {
       id: 'statements',

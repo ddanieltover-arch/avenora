@@ -7,6 +7,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { defaultCardService } from '../services/card.service.ts';
 import { authenticate } from '../middleware/auth.ts';
+import { requireTransactionEligible } from '../middleware/accountAccess.ts';
 
 export const cardRouter = Router();
 
@@ -43,7 +44,9 @@ const SimulateAuthSchema = z.object({
 cardRouter.get('/', authenticate, (req: Request, res: Response, next: NextFunction): void => {
   try {
     const user = req.user!;
-    const cards = defaultCardService.getUserCards(user.id);
+    const cards = defaultCardService
+      .getUserCards(user.id)
+      .map((c) => defaultCardService.sanitizeCardForCustomer(c));
     res.json({
       total: cards.length,
       cards,
@@ -82,7 +85,11 @@ cardRouter.get('/:id', authenticate, (req: Request, res: Response, next: NextFun
       return;
     }
 
-    res.json({ card });
+    const payload =
+      card.userId === user.id && !isStaff
+        ? defaultCardService.sanitizeCardForCustomer(card)
+        : card;
+    res.json({ card: payload });
   } catch (err) {
     next(err);
   }
@@ -90,8 +97,9 @@ cardRouter.get('/:id', authenticate, (req: Request, res: Response, next: NextFun
 
 /**
  * POST /api/v1/cards/request
+ * Queues a card issuance request for admin approval (not immediately active).
  */
-cardRouter.post('/request', authenticate, (req: Request, res: Response, next: NextFunction): void => {
+cardRouter.post('/request', authenticate, requireTransactionEligible, (req: Request, res: Response, next: NextFunction): void => {
   try {
     const user = req.user!;
     const validated = RequestCardSchema.parse(req.body);
@@ -102,13 +110,16 @@ cardRouter.post('/request', authenticate, (req: Request, res: Response, next: Ne
       currency: validated.currency,
       type: validated.type,
       form: validated.form,
+      countryCode: user.countryCode,
       dailyLimitDecimal: validated.dailyLimitDecimal,
       singleTxLimitDecimal: validated.singleTxLimitDecimal,
     });
 
     res.status(201).json({
-      status: 'card_issued',
-      card,
+      status: 'card_request_pending_review',
+      message:
+        'Your card request was submitted and is awaiting administrator approval before it can be issued.',
+      card: defaultCardService.sanitizeCardForCustomer(card),
     });
   } catch (err) {
     next(err);
@@ -118,7 +129,7 @@ cardRouter.post('/request', authenticate, (req: Request, res: Response, next: Ne
 /**
  * PATCH /api/v1/cards/:id/status
  */
-cardRouter.patch('/:id/status', authenticate, (req: Request, res: Response, next: NextFunction): void => {
+cardRouter.patch('/:id/status', authenticate, requireTransactionEligible, (req: Request, res: Response, next: NextFunction): void => {
   try {
     const user = req.user!;
     const cardId = req.params.id!;
@@ -144,7 +155,7 @@ cardRouter.patch('/:id/status', authenticate, (req: Request, res: Response, next
 /**
  * PATCH /api/v1/cards/:id/limits
  */
-cardRouter.patch('/:id/limits', authenticate, (req: Request, res: Response, next: NextFunction): void => {
+cardRouter.patch('/:id/limits', authenticate, requireTransactionEligible, (req: Request, res: Response, next: NextFunction): void => {
   try {
     const user = req.user!;
     const cardId = req.params.id!;
@@ -169,7 +180,7 @@ cardRouter.patch('/:id/limits', authenticate, (req: Request, res: Response, next
 /**
  * POST /api/v1/cards/:id/simulate-auth
  */
-cardRouter.post('/:id/simulate-auth', authenticate, (req: Request, res: Response, next: NextFunction): void => {
+cardRouter.post('/:id/simulate-auth', authenticate, requireTransactionEligible, (req: Request, res: Response, next: NextFunction): void => {
   try {
     const cardId = req.params.id!;
     const validated = SimulateAuthSchema.parse(req.body);
@@ -196,7 +207,7 @@ cardRouter.post('/:id/simulate-auth', authenticate, (req: Request, res: Response
 /**
  * POST /api/v1/cards/authorizations/:authId/settle
  */
-cardRouter.post('/authorizations/:authId/settle', authenticate, (req: Request, res: Response, next: NextFunction): void => {
+cardRouter.post('/authorizations/:authId/settle', authenticate, requireTransactionEligible, (req: Request, res: Response, next: NextFunction): void => {
   try {
     const user = req.user!;
     const authId = req.params.authId!;
@@ -218,7 +229,7 @@ cardRouter.post('/authorizations/:authId/settle', authenticate, (req: Request, r
 /**
  * POST /api/v1/cards/authorizations/:authId/release
  */
-cardRouter.post('/authorizations/:authId/release', authenticate, (req: Request, res: Response, next: NextFunction): void => {
+cardRouter.post('/authorizations/:authId/release', authenticate, requireTransactionEligible, (req: Request, res: Response, next: NextFunction): void => {
   try {
     const user = req.user!;
     const authId = req.params.authId!;

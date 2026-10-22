@@ -324,12 +324,12 @@ export function GrantManagementView() {
           onClick={() => setActiveTab('officer')}
           className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition ${
             activeTab === 'officer'
-              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-950'
+              ? 'bg-brand-primary text-white shadow-md'
               : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
           }`}
         >
           <ShieldCheck className="w-4 h-4" />
-          Officer Grant Review & Disbursement {isStaff && <span className="px-1.5 py-0.5 rounded-full bg-indigo-500/30 text-[10px]">Staff</span>}
+          Officer Grant Review & Disbursement {isStaff && <span className="px-1.5 py-0.5 rounded-full bg-brand-accent/30 text-[10px]">Staff</span>}
         </button>
       </div>
 
@@ -383,7 +383,7 @@ export function GrantManagementView() {
                 <div className="space-y-3">
                   <div className="flex justify-between items-start gap-2">
                     <div className="flex items-center gap-2">
-                      <span className="font-mono text-[10px] text-cyan-400 font-bold px-2 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-800/60">
+                      <span className="font-mono text-[10px] text-brand-accent font-bold px-2 py-0.5 rounded-full bg-brand-deep/50 border border-brand-primary/40">
                         {prog.currency}
                       </span>
                       <span className="text-[11px] text-slate-400 font-medium">{prog.organizationName}</span>
@@ -408,7 +408,7 @@ export function GrantManagementView() {
                 <div className="space-y-3 pt-3 border-t border-slate-800/80 text-xs">
                   <div className="flex justify-between items-center">
                     <span className="text-slate-400">Award Amount:</span>
-                    <span className="font-bold font-mono text-cyan-300">{prog.formattedFundingRange}</span>
+                    <span className="font-bold font-mono text-brand-accent">{prog.formattedFundingRange}</span>
                   </div>
 
                   <div className="flex justify-between items-center text-[11px] text-slate-400">
@@ -443,7 +443,7 @@ export function GrantManagementView() {
           <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-2xl w-full max-h-[min(calc(100dvh-1.5rem),920px)] overflow-y-auto overscroll-y-contain p-6 sm:p-8 space-y-6 scrollbar-thin shadow-2xl my-auto sm:my-0">
             <div className="flex justify-between items-start">
               <div>
-                <span className="text-[11px] text-cyan-400 font-bold block">{applyingProgram.organizationName}</span>
+                <span className="text-[11px] text-brand-accent font-bold block">{applyingProgram.organizationName}</span>
                 <h3 className="text-lg font-bold text-white mt-0.5">{applyingProgram.name}</h3>
                 <span className="text-xs text-slate-400 font-mono">Range: {applyingProgram.formattedFundingRange}</span>
               </div>
@@ -568,7 +568,7 @@ export function GrantManagementView() {
                     }`}
                   >
                     <div className="flex justify-between items-start mb-1">
-                      <span className="font-mono text-[11px] text-cyan-400 font-bold">{app.id}</span>
+                      <span className="font-mono text-[11px] text-brand-accent font-bold">{app.id}</span>
                       <span
                         className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                           app.status === 'APPROVED_FOR_DEMO'
@@ -600,7 +600,7 @@ export function GrantManagementView() {
                 <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 border-b border-slate-800 pb-4">
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="font-mono font-bold text-cyan-400 text-sm">{selectedApp.id}</span>
+                      <span className="font-mono font-bold text-brand-accent text-sm">{selectedApp.id}</span>
                       <span className="text-slate-400">• {selectedApp.programName}</span>
                     </div>
                     <h4 className="text-base font-bold text-white mt-1">{selectedApp.projectTitle}</h4>
@@ -626,7 +626,7 @@ export function GrantManagementView() {
                   <p className="text-slate-200 leading-relaxed">{selectedApp.projectSummary}</p>
                   <div className="flex justify-between items-center pt-2 text-[11px] text-slate-400 border-t border-slate-800/80">
                     <span>Requested Grant Capital:</span>
-                    <span className="font-bold font-mono text-cyan-400">{selectedApp.formattedRequestedAmount}</span>
+                    <span className="font-bold font-mono text-brand-accent">{selectedApp.formattedRequestedAmount}</span>
                   </div>
                 </div>
 
@@ -666,7 +666,7 @@ export function GrantManagementView() {
 
                 {/* Officer review & disbursement */}
                 {activeTab === 'officer' && (
-                  <div className="p-5 rounded-2xl bg-indigo-950/20 border border-indigo-500/30 space-y-4">
+                  <div className="p-5 rounded-2xl bg-brand-deep/40 border border-brand-primary/35 space-y-4">
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-white text-sm flex items-center gap-2">
                         <ShieldCheck className="w-4 h-4 text-indigo-400" />
@@ -711,7 +711,7 @@ export function GrantManagementView() {
                             <button
                               onClick={() => handleReviewApplication(selectedApp.id)}
                               disabled={reviewLoading}
-                              className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold transition text-xs shadow-md shadow-indigo-950 disabled:opacity-50"
+                              className="px-4 py-2 rounded-xl bg-brand-primary hover:bg-brand-deep text-white font-bold transition text-xs shadow-md disabled:opacity-50"
                             >
                               {reviewLoading ? 'Recording...' : 'Commit Review Decision'}
                             </button>

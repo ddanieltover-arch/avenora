@@ -59,6 +59,18 @@ export function createExpressApp(): Express {
   app.use('/api/v1/admin', adminRouter);
   app.use('/api/v1/domestic-accounts', domesticBankAccountRouter);
 
+  // Unmatched API routes must return JSON (Vite SPA middleware may otherwise yield an empty body).
+  app.use('/api', (req: Request, res: Response) => {
+    res.status(404).json({
+      type: 'https://avenora.com/errors/not-found',
+      title: 'Not Found',
+      status: 404,
+      detail: `No API route matches ${req.method} ${req.originalUrl}.`,
+      instance: req.originalUrl,
+      timestamp: new Date().toISOString(),
+    });
+  });
+
   // Centralized Error Handler (must be last)
   app.use(centralErrorHandler);
 

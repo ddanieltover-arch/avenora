@@ -20,7 +20,6 @@ export interface DomesticAccountCustomerView {
   formattedValue?: string;
   maskedValue?: string;
   displayFields?: DomesticAccountDisplayField[];
-  disclaimer?: string;
   generatedAt?: string;
   lastError?: string;
   message?: string;

@@ -7,6 +7,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { defaultWalletService } from '../services/wallet.service.ts';
 import { authenticate } from '../middleware/auth.ts';
+import { requireTransactionEligible } from '../middleware/accountAccess.ts';
 import { isDepositRailAllowedForCountry } from '../../domain/country/countryDepositRails.ts';
 import { isWithdrawalRailAllowedForCountry } from '../../domain/country/withdrawalRailFields.ts';
 
@@ -81,6 +82,8 @@ walletRouter.get('/transactions', authenticate, (req: Request, res: Response, ne
       search,
     });
 
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
     res.json({
       total: transactions.length,
       transactions,
@@ -137,7 +140,7 @@ walletRouter.get('/deposit/btc-instructions', authenticate, (_req: Request, res:
   res.json(defaultWalletService.getBtcDepositInstructions());
 });
 
-walletRouter.post('/deposit/btc-proof', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+walletRouter.post('/deposit/btc-proof', authenticate, requireTransactionEligible, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const validated = BtcDepositProofSchema.parse(req.body);
     const record = await defaultWalletService.submitBtcDepositProof({
@@ -161,7 +164,7 @@ walletRouter.post('/deposit/btc-proof', authenticate, async (req: Request, res: 
   }
 });
 
-walletRouter.post('/deposit', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+walletRouter.post('/deposit', authenticate, requireTransactionEligible, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const validated = DepositSchema.parse(req.body);
     const idempotencyKey = (req.headers['idempotency-key'] as string) || undefined;
@@ -214,7 +217,7 @@ walletRouter.post('/deposit', authenticate, async (req: Request, res: Response, 
  * POST /api/v1/wallets/withdraw
  * Executes an authorized simulated withdrawal with available balance verification.
  */
-walletRouter.post('/withdraw', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+walletRouter.post('/withdraw', authenticate, requireTransactionEligible, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const validated = WithdrawalSchema.parse(req.body);
     const currency = validated.currency.toUpperCase();
@@ -270,7 +273,7 @@ walletRouter.post('/withdraw', authenticate, async (req: Request, res: Response,
  * POST /api/v1/wallets/transfer
  * Executes an atomic simulated internal transfer between customer wallets.
  */
-walletRouter.post('/transfer', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+walletRouter.post('/transfer', authenticate, requireTransactionEligible, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const validated = TransferSchema.parse(req.body);
     const idempotencyKey = (req.headers['idempotency-key'] as string) || undefined;
@@ -294,7 +297,7 @@ walletRouter.post('/transfer', authenticate, async (req: Request, res: Response,
  * POST /api/v1/wallets/fx/quote
  * Requests an illustrative short-lived FX quote.
  */
-walletRouter.post('/fx/quote', authenticate, (req: Request, res: Response, next: NextFunction) => {
+walletRouter.post('/fx/quote', authenticate, requireTransactionEligible, (req: Request, res: Response, next: NextFunction) => {
   try {
     const validated = FxQuoteSchema.parse(req.body);
 
@@ -317,7 +320,7 @@ walletRouter.post('/fx/quote', authenticate, (req: Request, res: Response, next:
  * POST /api/v1/wallets/fx/convert
  * Executes conversion against a valid quote with atomic multi-currency balanced postings.
  */
-walletRouter.post('/fx/convert', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+walletRouter.post('/fx/convert', authenticate, requireTransactionEligible, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const validated = FxConvertSchema.parse(req.body);
     const idempotencyKey = (req.headers['idempotency-key'] as string) || undefined;

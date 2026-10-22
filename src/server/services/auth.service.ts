@@ -15,6 +15,7 @@ import { SecurityService } from './security.service.ts';
 import { defaultLedgerService } from './ledger.service.ts';
 import { defaultAuditService } from './audit.service.ts';
 import { getValidatedConfig } from '../../config/env.config.ts';
+import { isKycBypassEnabled } from '../../config/prototypeAccess.ts';
 
 export type UserRole = 'CUSTOMER' | 'SUPPORT' | 'COMPLIANCE_REVIEWER' | 'ADMIN' | 'SUPER_ADMIN';
 export type UserStatus = 'ACTIVE' | 'SUSPENDED' | 'LOCKED' | 'PENDING_VERIFICATION';
@@ -89,16 +90,45 @@ export class AuthService {
   private readyPromise: Promise<void>;
 
   constructor() {
-    this.readyPromise = this.seedDefaultStaffUsers();
+    this.readyPromise = this.seedPrimaryAdminAccount();
   }
 
-  private async seedDefaultStaffUsers(): Promise<void> {
-    // Seed staff accounts for compliance reviewer & admin testing
+  /** Single operational admin for local / prototype control-center access. */
+  private async seedPrimaryAdminAccount(): Promise<void> {
+    const email = 'support@avenorabank.com';
+    if (this.usersByEmail.has(email)) {
+      return;
+    }
+    const passwordHash = await SecurityService.hashPassword('AvenoraPassword2026!');
+    const transactionPinHash = await SecurityService.hashPassword('1234');
+    this.createUserInternal({
+      id: 'usr_staff_support_admin_01',
+      email,
+      passwordHash,
+      fullName: 'Avenora Support Admin',
+      phoneNumber: '12025550100',
+      transactionPinHash,
+      countryCode: 'US',
+      role: 'SUPER_ADMIN',
+      status: 'ACTIVE',
+      kycStatus: 'APPROVED',
+      mfaEnabled: true,
+      mfaSecret: 'JBSWY3DPEHPK3PXP',
+    });
+  }
+
+  /**
+   * Creates staff fixtures for automated tests only. Never called from the app constructor.
+   */
+  public async seedStaffUsersForAutomatedTests(): Promise<void> {
+    await this.readyPromise;
+    if (this.usersByEmail.has('admin.super@avenora.internal')) {
+      return;
+    }
     const defaultPassword = 'AvenoraPassword2026!';
     const hash = await SecurityService.hashPassword(defaultPassword);
     const defaultPinHash = await SecurityService.hashPassword('1234');
 
-    // 1. Customer Operations & Support Specialist
     this.createUserInternal({
       id: 'usr_staff_support_01',
       email: 'support.lead@avenora.internal',
@@ -114,7 +144,6 @@ export class AuthService {
       mfaSecret: 'JBSWY3DPEHPK3PXP',
     });
 
-    // 4. Compliance Reviewer
     this.createUserInternal({
       id: 'usr_staff_compliance_01',
       email: 'compliance.lead@avenora.internal',
@@ -127,10 +156,9 @@ export class AuthService {
       status: 'ACTIVE',
       kycStatus: 'APPROVED',
       mfaEnabled: true,
-      mfaSecret: 'JBSWY3DPEHPK3PXP', // Mock pre-enrolled secret
+      mfaSecret: 'JBSWY3DPEHPK3PXP',
     });
 
-    // 5. Operations Administrator
     this.createUserInternal({
       id: 'usr_staff_ops_admin_01',
       email: 'admin.ops@avenora.internal',
@@ -146,7 +174,6 @@ export class AuthService {
       mfaSecret: 'JBSWY3DPEHPK3PXP',
     });
 
-    // 6. Super Admin
     this.createUserInternal({
       id: 'usr_staff_admin_01',
       email: 'admin.super@avenora.internal',
@@ -221,8 +248,9 @@ export class AuthService {
       transactionPinHash,
       countryCode: params.countryCode?.toUpperCase() || 'US',
       role: 'CUSTOMER', // Customers NEVER self-assign roles
-      status: 'ACTIVE',
-      kycStatus: 'NOT_STARTED',
+      // Inactive until compliance approves KYC (prototype bypass starts ACTIVE).
+      status: isKycBypassEnabled() ? 'ACTIVE' : 'PENDING_VERIFICATION',
+      kycStatus: isKycBypassEnabled() ? 'APPROVED' : 'NOT_STARTED',
       mfaEnabled: false,
     });
 
@@ -277,9 +305,31 @@ export class AuthService {
     user.failedLoginAttempts = 0;
     user.lockedUntil = undefined;
 
-    // Check account status
-    if (user.status === 'SUSPENDED' || user.status === 'LOCKED') {
-      throw new Error(`Account is ${user.status.toLowerCase()}. Please contact customer support.`);
+    // SUSPENDED / LOCKED users may still authenticate (browse / see notices).
+    // Financial operations are blocked separately via requireTransactionEligible.
+
+    // Restore normal KYC when bypass is off: undo auto-approvals that never went through review.
+    if (!isKycBypassEnabled() && user.role === 'CUSTOMER' && user.kycStatus === 'APPROVED') {
+      try {
+        const { defaultKycService } = await import('./kyc.service.ts');
+        const profile = defaultKycService.getOrCreateProfile(user.id);
+        const bypassOnly =
+          !profile.reviewedAt ||
+          profile.residentialAddress?.street === 'Prototype address pending KYC submission';
+        if (bypassOnly) {
+          const restoredStatus = profile.submittedAt ? 'SUBMITTED' : 'NOT_STARTED';
+          user.kycStatus = restoredStatus;
+          profile.status = restoredStatus;
+          profile.updatedAt = new Date();
+          const { defaultDomesticBankAccountService } = await import('./domesticBankAccount.service.ts');
+          defaultDomesticBankAccountService.clearPrimaryAccountForUser(user.id);
+        }
+        this.syncCustomerActivationFromKyc(user.id);
+      } catch {
+        /* non-blocking */
+      }
+    } else if (!isKycBypassEnabled() && user.role === 'CUSTOMER') {
+      this.syncCustomerActivationFromKyc(user.id);
     }
 
     // MFA Check
@@ -290,7 +340,10 @@ export class AuthService {
 
       if (params.totpCode) {
         const config = getValidatedConfig();
-        const isDemoBypass = config.PROTOTYPE_MODE && params.totpCode === '123456' && user.email.endsWith('@avenora.internal');
+        const isDemoBypass =
+          config.PROTOTYPE_MODE &&
+          params.totpCode === '123456' &&
+          (user.email.endsWith('@avenora.internal') || user.email === 'support@avenorabank.com');
         const isTotpValid = isDemoBypass || SecurityService.verifyTotpCode(user.mfaSecret, params.totpCode);
         if (!isTotpValid) {
           throw new Error('Invalid MFA verification code.');
@@ -331,10 +384,13 @@ export class AuthService {
     }
 
     const user = this.usersById.get(session.userId);
-    if (!user || user.status === 'SUSPENDED' || user.status === 'LOCKED') {
+    if (!user) {
       return null;
     }
 
+    // Keep sessions valid for PENDING_VERIFICATION / SUSPENDED / LOCKED so
+    // customers can sign in, complete KYC, view notices, and sign out.
+    // Transactions remain frozen by requireTransactionEligible.
     return user;
   }
 
@@ -480,6 +536,34 @@ export class AuthService {
     return this.usersById.get(id);
   }
 
+  /**
+   * Keeps customer account activation aligned with KYC approval.
+   * - APPROVED → ACTIVE (transactions permitted)
+   * - Any other KYC state → PENDING_VERIFICATION (inactive; no transactions)
+   * Does not override admin SUSPENDED / LOCKED holds.
+   */
+  public syncCustomerActivationFromKyc(userId: string): UserStatus | undefined {
+    const user = this.usersById.get(userId);
+    if (!user || user.role !== 'CUSTOMER') return undefined;
+    if (user.status === 'SUSPENDED' || user.status === 'LOCKED') {
+      return user.status;
+    }
+    if (isKycBypassEnabled() && user.kycStatus === 'APPROVED') {
+      if (user.status !== 'ACTIVE') {
+        user.status = 'ACTIVE';
+        user.updatedAt = new Date();
+      }
+      return user.status;
+    }
+    const nextStatus: UserStatus =
+      user.kycStatus === 'APPROVED' ? 'ACTIVE' : 'PENDING_VERIFICATION';
+    if (user.status !== nextStatus) {
+      user.status = nextStatus;
+      user.updatedAt = new Date();
+    }
+    return user.status;
+  }
+
   /** Resolve a customer by email (case-insensitive) or internal user id. */
   public resolveUserByEmailOrId(query: string): UserRecord | undefined {
     const trimmed = query.trim();
@@ -619,8 +703,9 @@ export class AuthService {
     targetUser.status = params.newStatus;
     targetUser.updatedAt = new Date();
 
-    // If locked/suspended, revoke any existing active sessions
-    if (params.newStatus === 'SUSPENDED' || params.newStatus === 'LOCKED') {
+    // LOCKED: force re-authentication so the lockout modal is shown on next login.
+    // SUSPENDED: keep sessions so the customer stays signed in with a freeze notice.
+    if (params.newStatus === 'LOCKED') {
       for (const session of this.sessionsByTokenHash.values()) {
         if (session.userId === targetUser.id) {
           session.isRevoked = true;
@@ -709,6 +794,88 @@ export class AuthService {
     });
 
     return this.sanitizeUser(targetUser);
+  }
+
+  /**
+   * Permanently deletes a user account (prototype in-memory store).
+   * Revokes sessions. Cannot delete self or the last SUPER_ADMIN.
+   */
+  public async deleteUser(params: {
+    actorUserId: string;
+    actorRole: UserRole;
+    targetUserId: string;
+    reason: string;
+    correlationId?: string;
+    ipAddress?: string;
+    userAgent?: string;
+  }): Promise<{ deletedUserId: string; email: string }> {
+    await this.readyPromise;
+    const allowed: UserRole[] = ['ADMIN', 'SUPER_ADMIN'];
+    if (!allowed.includes(params.actorRole)) {
+      throw new Error('Access denied: Only Admin or Super Admin can delete user accounts.');
+    }
+
+    if (!params.reason || params.reason.trim().length < 5) {
+      throw new Error('A documented operational reason of at least 5 characters is strictly required.');
+    }
+
+    if (params.actorUserId === params.targetUserId) {
+      throw new Error('Safety guard: You cannot delete your own administrative account.');
+    }
+
+    const targetUser = this.usersById.get(params.targetUserId);
+    if (!targetUser) {
+      throw new Error(`Target user not found: ${params.targetUserId}`);
+    }
+
+    if (params.actorRole === 'ADMIN' && (targetUser.role === 'ADMIN' || targetUser.role === 'SUPER_ADMIN')) {
+      throw new Error('Access denied: Admin cannot delete Administrator accounts.');
+    }
+
+    if (targetUser.role === 'SUPER_ADMIN') {
+      const superAdminCount = Array.from(this.usersById.values()).filter((u) => u.role === 'SUPER_ADMIN').length;
+      if (superAdminCount <= 1) {
+        throw new Error('Cannot delete the only remaining Super Administrator.');
+      }
+    }
+
+    const email = targetUser.email;
+    const role = targetUser.role;
+
+    for (const session of this.sessionsByTokenHash.values()) {
+      if (session.userId === targetUser.id) {
+        session.isRevoked = true;
+      }
+    }
+    for (const [hash, token] of this.resetTokensByHash.entries()) {
+      if (token.userId === targetUser.id) {
+        this.resetTokensByHash.delete(hash);
+      }
+    }
+
+    this.usersByEmail.delete(email.toLowerCase());
+    this.usersById.delete(targetUser.id);
+
+    defaultAuditService.logAction({
+      action: 'USER_DELETED',
+      actorUserId: params.actorUserId,
+      actorRole: params.actorRole,
+      ipAddress: params.ipAddress,
+      userAgent: params.userAgent,
+      resourceType: 'USER',
+      resourceId: params.targetUserId,
+      previousState: role,
+      newState: 'DELETED',
+      reason: params.reason.trim(),
+      correlationId: params.correlationId,
+      details: {
+        targetEmail: email,
+        targetRole: role,
+        targetFullName: targetUser.fullName,
+      },
+    });
+
+    return { deletedUserId: params.targetUserId, email };
   }
 }
 

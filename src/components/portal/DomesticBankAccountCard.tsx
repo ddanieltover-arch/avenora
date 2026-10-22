@@ -1,22 +1,21 @@
 /**
  * @license Apache-2.0
- * Customer-facing simulated domestic bank account details (post-KYC).
- * Numbers use each country's banking format; prototype-only (not live settlement).
+ * Customer-facing country-format domestic bank account details (auto-generated post-KYC).
+ * Used on mobile overview; desktop embeds equivalent UI in the portfolio hero.
  */
 
 import React, { useState } from 'react';
-import { Building2, Check, Copy } from 'lucide-react';
+import { Building2, Check, Copy, Siren } from 'lucide-react';
 import { useAuth } from '../AuthContext.tsx';
 import { useDomesticBankAccount } from '../../hooks/useDomesticBankAccount.ts';
-
-const PROTOTYPE_BANNER =
-  'SIMULATED ACCOUNT — PROTOTYPE ONLY — NOT FOR REAL DEPOSITS, WITHDRAWALS, OR LIVE FINANCIAL SETTLEMENT.';
 
 interface DomesticBankAccountCardProps {
   onNavigateToKyc?: () => void;
 }
 
-export const DomesticBankAccountCard: React.FC<DomesticBankAccountCardProps> = ({ onNavigateToKyc }) => {
+export const DomesticBankAccountCard: React.FC<DomesticBankAccountCardProps> = ({
+  onNavigateToKyc,
+}) => {
   const { user } = useAuth();
   const { data, loading, error } = useDomesticBankAccount();
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -48,8 +47,43 @@ export const DomesticBankAccountCard: React.FC<DomesticBankAccountCardProps> = (
   }
 
   const status = data?.generationStatus ?? 'NOT_ELIGIBLE';
-  const kycStatus = data?.kycStatus || user?.kycStatus || 'NOT_STARTED';
   const country = data?.verifiedCountryCode || user?.countryCode || '—';
+  const fields = status === 'GENERATED' ? data?.displayFields ?? [] : [];
+  const kycAlertNeeded =
+    fields.length === 0 &&
+    user?.kycStatus !== 'APPROVED' &&
+    status !== 'PENDING_GENERATION';
+
+  if (kycAlertNeeded) {
+    return (
+      <article
+        className="rounded-[20px] border p-5 space-y-3 animate-kyc-siren text-white shadow-sm"
+        role="alert"
+        aria-live="polite"
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <Siren className="w-4 h-4 text-red-100 shrink-0 animate-kyc-siren-icon" aria-hidden />
+            <h3 className="font-serif font-bold text-white truncate">Verification required</h3>
+          </div>
+          <span className="text-[10px] font-bold text-red-100 uppercase tracking-wide shrink-0">
+            {country}
+          </span>
+        </div>
+        <p className="text-[11px] text-red-50 leading-relaxed font-medium">
+          Complete identity verification to unlock your domestic account numbers.
+        </p>
+        <button
+          type="button"
+          onClick={() => onNavigateToKyc?.()}
+          className="inline-flex items-center gap-1.5 text-[11px] font-bold text-white bg-red-950/40 hover:bg-red-950/55 border border-red-100/40 rounded-lg px-3 py-1.5 cursor-pointer"
+        >
+          <Siren className="w-3.5 h-3.5 animate-kyc-siren-icon" aria-hidden />
+          Open verification now
+        </button>
+      </article>
+    );
+  }
 
   return (
     <article className="bg-white rounded-[20px] border border-[#E2E8E4]/80 shadow-sm p-5 space-y-3">
@@ -61,14 +95,13 @@ export const DomesticBankAccountCard: React.FC<DomesticBankAccountCardProps> = (
         <span className="text-[10px] font-bold text-[#68746E] uppercase tracking-wide">{country}</span>
       </div>
 
-      <p className="text-[11px] leading-relaxed font-semibold text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-        {data?.disclaimer || PROTOTYPE_BANNER}
-      </p>
-
-      {status === 'GENERATED' && data?.displayFields && data.displayFields.length > 0 ? (
+      {fields.length > 0 ? (
         <ul className="space-y-2">
-          {data.displayFields.map((field) => (
-            <li key={field.key} className="flex items-center justify-between gap-2 p-3 rounded-xl bg-[#F1F4F1]/60 text-xs">
+          {fields.map((field) => (
+            <li
+              key={field.key}
+              className="flex items-center justify-between gap-2 p-3 rounded-xl bg-[#F1F4F1]/60 text-xs"
+            >
               <div>
                 <p className="text-[#68746E]">{field.label}</p>
                 <p className="font-mono font-semibold text-[#17231F] mt-0.5 break-all">{field.value}</p>
@@ -91,32 +124,15 @@ export const DomesticBankAccountCard: React.FC<DomesticBankAccountCardProps> = (
       ) : (
         <div className="space-y-2">
           <p className="text-xs text-[#68746E] leading-relaxed">
-            {status === 'NOT_ELIGIBLE'
-              ? 'After identity verification is approved, Avenora automatically generates domestic account numbers in your country’s banking format (for example US routing + account, UK sort code + account, or IBAN).'
-              : status === 'PENDING_GENERATION'
-                ? data?.message || 'Your verification is approved. Generating your country-format account numbers…'
-                : status === 'COUNTRY_MISMATCH_REQUIRES_REVIEW'
-                  ? 'Your verified country differs from signup country. Our compliance team must resolve this before account details can be issued.'
-                  : status === 'FORMAT_NOT_IMPLEMENTED'
-                    ? 'Domestic account simulation is not yet available for your verified country. No placeholder bank details are shown.'
-                    : status === 'GENERATION_FAILED'
-                      ? `Account generation is temporarily unavailable. ${data?.lastError ?? ''}`
-                      : data?.message ?? 'Account details are not available yet.'}
+            {status === 'PENDING_GENERATION'
+              ? data?.message || 'Generating your country-format account numbers…'
+              : status === 'FORMAT_NOT_IMPLEMENTED'
+                ? 'Domestic account numbers are not yet available for your signup country.'
+                : status === 'GENERATION_FAILED'
+                  ? `Account generation is temporarily unavailable. ${data?.lastError ?? ''}`
+                  : data?.message ??
+                    'Refreshing account details… If this persists, reload the page.'}
           </p>
-          {status === 'NOT_ELIGIBLE' && (
-            <p className="text-[11px] text-[#17231F]">
-              Current KYC status: <strong>{String(kycStatus).replace(/_/g, ' ')}</strong>
-            </p>
-          )}
-          {status === 'NOT_ELIGIBLE' && onNavigateToKyc && (
-            <button
-              type="button"
-              onClick={onNavigateToKyc}
-              className="text-xs font-semibold text-[#075B46] hover:underline cursor-pointer"
-            >
-              Open identity verification
-            </button>
-          )}
         </div>
       )}
     </article>

@@ -89,11 +89,12 @@ const FULL_BR: Omit<CountryBankingRule, 'countryCode'> = {
   scheme: 'BR_FEBRABAN',
   simulationStatus: 'FULL',
   primaryIdentifierType: 'BANK_ACCOUNT',
-  implementedComponents: ['banco', 'agencia', 'conta'],
+  implementedComponents: ['banco', 'agencia', 'conta', 'pixKey'],
   validationSupport: true,
   syntheticGenerationSupport: true,
   safeSimulationStatus: 'PROTOTYPE_ONLY',
-  verificationSource: 'FEBRABAN bank/branch/account layout; modulo-11 style account check digit (prototype).',
+  verificationSource:
+    'FEBRABAN bank/branch/account layout; modulo-11 style account check digit; unique phone-style Pix key (prototype).',
 };
 
 const NOT_IMPLEMENTED: Omit<CountryBankingRule, 'countryCode'> = {

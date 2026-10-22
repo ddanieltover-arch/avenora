@@ -24,7 +24,6 @@ import {
   Wallet,
   ArrowDownLeft,
   ArrowUpRight,
-  ArrowRightLeft,
   RefreshCw,
   Clock,
   ShieldCheck,
@@ -35,7 +34,17 @@ import {
   UploadCloud,
 } from 'lucide-react';
 
-type WalletModalId = 'deposit' | 'withdraw' | 'transfer' | 'convert';
+type WalletModalId = 'deposit' | 'withdraw' | 'convert';
+
+/** Deep-link actions from dashboard quick actions into wallet modals. */
+export type WalletDeepLinkModal = 'deposit' | 'withdraw';
+
+interface WalletViewProps {
+  initialModal?: WalletDeepLinkModal | null;
+  onInitialModalConsumed?: () => void;
+  /** Refresh portal dashboard charts / recent activity after wallet mutations. */
+  onWalletActivity?: () => void;
+}
 
 function WalletModalOverlay({
   onClose,
@@ -64,7 +73,7 @@ function WalletModalOverlay({
       }}
     >
       <div
-        className="modal-panel-scroll bg-slate-900 rounded-2xl border border-slate-800 shadow-2xl max-w-xl w-full my-auto sm:my-0"
+        className="modal-panel-scroll portal-dark-panel max-w-xl w-full my-auto sm:my-0"
         onClick={(event) => event.stopPropagation()}
       >
         {children}
@@ -89,7 +98,11 @@ interface WalletAccount {
   status: string;
 }
 
-export const WalletView: React.FC = () => {
+export const WalletView: React.FC<WalletViewProps> = ({
+  initialModal = null,
+  onInitialModalConsumed,
+  onWalletActivity,
+}) => {
   const { user, token } = useAuth();
   const { t } = useLocalization();
 
@@ -111,7 +124,6 @@ export const WalletView: React.FC = () => {
 
   const [opCurrency, setOpCurrency] = useState(primaryFiat);
   const [opAmount, setOpAmount] = useState('100.00');
-  const [opRecipient, setOpRecipient] = useState('');
   const [opSourceRail, setOpSourceRail] = useState('');
   const [opWithdrawRail, setOpWithdrawRail] = useState('');
   const [withdrawBankingDetails, setWithdrawBankingDetails] = useState<Record<string, string>>({});
@@ -343,6 +355,7 @@ export const WalletView: React.FC = () => {
             `Your request for ${fiatPart} is pending review and will appear under Hold until approved.`,
         });
         fetchWallet();
+        onWalletActivity?.();
       } else {
         setFeedback({
           success: false,
@@ -421,6 +434,7 @@ export const WalletView: React.FC = () => {
       if (res.ok) {
         setActiveModal(null);
         fetchWallet();
+        onWalletActivity?.();
         setFeedback({
           success: true,
           title: 'Deposit on hold',
@@ -481,6 +495,7 @@ export const WalletView: React.FC = () => {
           details: data,
         });
         fetchWallet();
+        onWalletActivity?.();
         setActiveModal(null);
         setBtcWithdrawAddress('');
         setWithdrawBankingDetails({});
@@ -495,47 +510,6 @@ export const WalletView: React.FC = () => {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Network error';
       setFeedback({ success: false, title: 'Network Error', message });
-    }
-  };
-
-  const handleTransfer = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setFeedback(null);
-    try {
-      const res = await fetch('/api/v1/wallets/transfer', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-          'Idempotency-Key': `trf_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        },
-        body: JSON.stringify({
-          recipientEmailOrId: opRecipient,
-          currency: opCurrency,
-          amountDecimal: opAmount,
-          note: opDestination || 'P2P Transfer',
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setFeedback({
-          success: true,
-          title: 'Internal Transfer Completed',
-          message: `Transferred ${data.formattedAmount} to recipient. Ref: ${data.referenceNumber}`,
-          details: data,
-        });
-        fetchWallet();
-        setActiveModal(null);
-      } else {
-        setFeedback({
-          success: false,
-          title: data.title || 'Transfer Failed',
-          message: data.detail || 'The transfer was rejected.',
-          details: data,
-        });
-      }
-    } catch (err: any) {
-      setFeedback({ success: false, title: 'Network Error', message: err.message });
     }
   };
 
@@ -590,6 +564,7 @@ export const WalletView: React.FC = () => {
         });
         setCurrentQuote(null);
         fetchWallet();
+        onWalletActivity?.();
         setActiveModal(null);
       } else {
         setFeedback({
@@ -610,6 +585,22 @@ export const WalletView: React.FC = () => {
     setFeedback(null);
   };
 
+  useEffect(() => {
+    if (!initialModal) return;
+    if (
+      user?.status === 'SUSPENDED' ||
+      user?.status === 'LOCKED' ||
+      user?.status === 'PENDING_VERIFICATION' ||
+      (user?.role === 'CUSTOMER' && user?.kycStatus !== 'APPROVED')
+    ) {
+      onInitialModalConsumed?.();
+      return;
+    }
+    setActiveModal(initialModal);
+    setFeedback(null);
+    onInitialModalConsumed?.();
+  }, [initialModal, user?.status, onInitialModalConsumed]);
+
   const walletActionButtons: {
     id: WalletModalId;
     label: string;
@@ -621,33 +612,57 @@ export const WalletView: React.FC = () => {
       label: t.actions.deposit,
       icon: ArrowDownLeft,
       className:
-        'bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-500/40',
+        'bg-brand-primary hover:bg-brand-deep text-white border border-brand-accent/40',
     },
     {
       id: 'withdraw',
       label: t.actions.withdraw,
       icon: ArrowUpRight,
-      className: 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700',
-    },
-    {
-      id: 'transfer',
-      label: t.actions.transfer,
-      icon: ArrowRightLeft,
-      className: 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700',
+      className:
+        'bg-brand-deep/40 hover:bg-brand-deep/60 text-brand-accent-light border border-brand-primary/40',
     },
   ];
 
+  const transactionsFrozen =
+    user?.status === 'SUSPENDED' ||
+    user?.status === 'LOCKED' ||
+    user?.status === 'PENDING_VERIFICATION' ||
+    (user?.role === 'CUSTOMER' && user?.kycStatus !== 'APPROVED');
+  const frozenForKyc =
+    transactionsFrozen &&
+    user?.status !== 'SUSPENDED' &&
+    user?.status !== 'LOCKED';
+
   return (
     <div className="space-y-6">
-      <p className="lg:hidden text-[10px] leading-snug font-medium text-amber-900 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-        SIMULATED — PROTOTYPE ONLY — NOT FOR LIVE FINANCIAL SETTLEMENT. Account identifiers are generated for
-        demonstration and are not live bank accounts.
-      </p>
+      {transactionsFrozen && (
+        <div
+          className={`rounded-xl border-2 px-4 py-3 text-sm ${
+            frozenForKyc
+              ? 'border-[#076c64] bg-[#eef7f5] text-[#003933]'
+              : 'border-amber-500 bg-amber-50 text-amber-950'
+          }`}
+          role="status"
+        >
+          <p
+            className={`font-bold uppercase tracking-wide ${
+              frozenForKyc ? 'text-[#003933]' : 'text-amber-900'
+            }`}
+          >
+            {frozenForKyc ? 'Account inactive — KYC required' : 'Transactions frozen'}
+          </p>
+          <p className={`text-xs mt-1 ${frozenForKyc ? 'text-[#3d5c56]' : 'text-amber-900/90'}`}>
+            {frozenForKyc
+              ? 'Deposits and withdrawals are blocked until an administrator approves your identity verification.'
+              : 'Your account status blocks deposits and withdrawals. Contact support@avenorabank.com.'}
+          </p>
+        </div>
+      )}
       {/* Wallet Header & Quick Operations Bar */}
-      <div className="bg-slate-900/90 rounded-2xl border border-slate-800 p-6 shadow-xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-800 gap-4">
+      <div className="portal-dark-panel p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-brand-primary/25 gap-4">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400">
+            <div className="p-2.5 portal-dark-icon">
               <Wallet className="w-5 h-5" />
             </div>
             <div>
@@ -664,7 +679,8 @@ export const WalletView: React.FC = () => {
             <button
               type="button"
               onClick={() => setWalletActionsOpen(true)}
-              className="lg:hidden w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 border border-slate-600 text-sm font-semibold text-white"
+              disabled={transactionsFrozen}
+              className="lg:hidden w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-brand-deep/50 border border-brand-primary/40 text-sm font-semibold text-white disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Wallet className="w-4 h-4" aria-hidden />
               Wallet actions
@@ -677,7 +693,8 @@ export const WalletView: React.FC = () => {
                     key={action.id}
                     type="button"
                     onClick={() => openWalletModal(action.id)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition shadow-sm ${action.className}`}
+                    disabled={transactionsFrozen}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition shadow-sm disabled:opacity-40 disabled:cursor-not-allowed ${action.className}`}
                   >
                     <Icon className="w-3.5 h-3.5" aria-hidden />
                     {action.label}
@@ -688,49 +705,47 @@ export const WalletView: React.FC = () => {
           </div>
         </div>
 
-        {/* Currency Cards Grid */}
+        {/* Currency Cards Grid — identical brand shell for fiat and BTC */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6 max-w-3xl">
           {accounts.map((acc) => (
             <div
               key={acc.id}
-              className="p-5 rounded-2xl bg-slate-950/70 border border-slate-800/80 hover:border-slate-700 transition space-y-3 relative overflow-hidden"
+              className="portal-dark-card p-5 space-y-3 relative overflow-hidden min-h-[11.5rem] flex flex-col"
             >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="w-8 h-8 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center font-bold text-sm text-cyan-400">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-8 h-8 shrink-0 flex items-center justify-center font-bold text-sm portal-dark-icon">
                     {acc.currencySymbol}
                   </span>
-                  <div>
+                  <div className="min-w-0">
                     <span className="text-xs font-bold text-white block">{acc.currency}</span>
-                    <span className="text-[10px] text-slate-400">{acc.currencyName}</span>
+                    <span className="text-[10px] text-slate-400 truncate block">{acc.currencyName}</span>
                   </div>
                 </div>
-                <span className="text-[10px] font-mono text-emerald-400 bg-brand-accent-light0/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                <span className="text-[10px] font-mono portal-dark-badge px-2 py-0.5 shrink-0">
                   {acc.status}
                 </span>
               </div>
 
-              <div>
+              <div className="flex-1">
                 <span className="text-[11px] text-slate-400 block">Available Balance</span>
-                <span className="text-lg font-bold text-white font-mono tracking-tight">
+                <span className="text-lg font-bold text-white font-mono tracking-tight break-all">
                   {acc.formattedBalance}
                 </span>
-                <span className="text-[11px] text-cyan-300/90 font-mono block mt-1 tabular-nums">
+                <span className="text-[11px] text-brand-accent font-mono block mt-1 tabular-nums break-all">
                   ≈{' '}
                   {formatIllustrativeEquivalent(
                     walletAvailableMajor(acc),
                     acc.currency,
                     acc.currency === 'BTC' ? primaryFiat : 'BTC',
                   )}
-                  <span className="text-slate-500 font-sans"> · illustrative</span>
                 </span>
               </div>
 
-              <div className="pt-2 border-t border-slate-900 flex justify-between text-[11px] text-slate-500 font-mono">
+              <div className="pt-2 border-t border-brand-primary/20 text-[11px] text-slate-400 font-mono">
                 <span title="Pending deposits and outbound withdrawals until admin approval">
                   Hold: {acc.formattedHold}
                 </span>
-                <span className="text-[10px]">{acc.accountNumber.substring(0, 14)}</span>
               </div>
             </div>
           ))}
@@ -830,14 +845,13 @@ export const WalletView: React.FC = () => {
               {opCurrency === 'BTC' && (
                 <p
                   id="btc-deposit-equivalent"
-                  className="mt-2 text-[12px] leading-relaxed text-orange-200"
+                  className="mt-2 text-[12px] leading-relaxed text-brand-accent"
                   aria-live="polite"
                 >
                   {btcDepositEquivalentDisplay ? (
                     <>
                       ≈{' '}
                       <span className="font-mono font-semibold text-white">{btcDepositEquivalentDisplay}</span>
-                      <span className="text-slate-500"> · illustrative FX</span>
                     </>
                   ) : (
                     <span className="text-slate-400">
@@ -858,7 +872,7 @@ export const WalletView: React.FC = () => {
               </button>
               <button
                 type="submit"
-                className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-brand-accent-light0 text-white font-medium shadow"
+                className="px-4 py-1.5 rounded-lg bg-brand-primary hover:bg-brand-deep text-white font-medium shadow"
               >
                 Confirm deposit
               </button>
@@ -895,7 +909,7 @@ export const WalletView: React.FC = () => {
                 href={`mailto:${PLATFORM_DEPOSIT_SUPPORT_EMAIL}?subject=${encodeURIComponent(
                   `Deposit request — ${fiatDepositNotice.currency} ${fiatDepositNotice.amount}`,
                 )}`}
-                className="text-cyan-300 underline"
+                className="text-brand-accent underline"
               >
                 {PLATFORM_DEPOSIT_SUPPORT_EMAIL}
               </a>{' '}
@@ -927,7 +941,7 @@ export const WalletView: React.FC = () => {
               ✕
             </button>
           </div>
-          <div className="rounded-xl border border-orange-500/25 bg-orange-950/20 p-3 space-y-1">
+          <div className="rounded-xl border border-brand-primary/30 bg-brand-deep/40 p-3 space-y-1">
             {btcDepositFiatAmount && (
               <p className="text-slate-300">
                 You requested{' '}
@@ -941,13 +955,12 @@ export const WalletView: React.FC = () => {
               Send exactly{' '}
               <span className="font-mono text-white">{btcDepositAmount} BTC</span> to the platform
               address below, then upload your payment screenshot.
-              <span className="text-slate-500"> · illustrative FX</span>
             </p>
           </div>
           <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 space-y-2">
             <span className="text-[10px] uppercase tracking-wide text-slate-500">Admin BTC address</span>
             <div className="flex items-start gap-2">
-              <code className="flex-1 break-all text-[11px] text-orange-300 font-mono">{btcAddress}</code>
+              <code className="flex-1 break-all text-[11px] text-brand-accent font-mono">{btcAddress}</code>
               <button
                 type="button"
                 onClick={copyBtcAddress}
@@ -968,7 +981,7 @@ export const WalletView: React.FC = () => {
                 btcProofInputRef.current?.click();
               }
             }}
-            className="cursor-pointer rounded-xl border border-dashed border-slate-700 bg-slate-950 p-5 text-center hover:border-orange-500/40"
+            className="cursor-pointer rounded-xl border border-dashed border-slate-700 bg-slate-950 p-5 text-center hover:border-brand-accent/60"
           >
             <input
               ref={btcProofInputRef}
@@ -985,7 +998,7 @@ export const WalletView: React.FC = () => {
               />
             ) : (
               <div className="space-y-2">
-                <UploadCloud className="mx-auto h-8 w-8 text-orange-400" />
+                <UploadCloud className="mx-auto h-8 w-8 text-brand-accent" />
                 <p className="text-sm text-white">Upload payment screenshot</p>
                 <p className="text-[10px] text-slate-500">JPEG, PNG, or WebP · Max 10 MB</p>
               </div>
@@ -1003,7 +1016,7 @@ export const WalletView: React.FC = () => {
               type="button"
               disabled={btcProofSubmitting || !btcProofFile}
               onClick={submitBtcDepositProof}
-              className="px-4 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white font-medium"
+              className="px-4 py-1.5 rounded-lg bg-brand-primary hover:bg-brand-deep disabled:opacity-50 text-white font-medium"
             >
               {btcProofSubmitting ? 'Submitting…' : 'Submit payment proof'}
             </button>
@@ -1018,7 +1031,7 @@ export const WalletView: React.FC = () => {
           <div className="modal-panel-body p-6 space-y-4">
           <div className="flex items-center justify-between pb-2 border-b border-slate-800">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
-              <ArrowUpRight className="w-4 h-4 text-cyan-400" />
+              <ArrowUpRight className="w-4 h-4 text-brand-accent" />
               Withdraw funds
             </h3>
             <button onClick={() => setActiveModal(null)} className="text-slate-400 hover:text-white">
@@ -1027,7 +1040,7 @@ export const WalletView: React.FC = () => {
           </div>
 
           <form onSubmit={handleWithdrawal} className="space-y-4 text-xs">
-            <div className="p-3 rounded-lg bg-cyan-950/30 border border-cyan-800/40 text-cyan-300 text-[11px]">
+            <div className="p-3 rounded-lg bg-brand-deep/40 border border-brand-primary/35 text-brand-accent-light text-[11px]">
               Funds are reserved from your available balance and shown under Hold until operations approves the payout.
               Rejected requests return the amount to available balance.
             </div>
@@ -1136,7 +1149,7 @@ export const WalletView: React.FC = () => {
               </button>
               <button
                 type="submit"
-                className="px-4 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-medium shadow"
+                className="px-4 py-1.5 rounded-lg bg-brand-primary hover:bg-brand-deep text-white font-medium shadow"
               >
                 Confirm withdrawal
               </button>
@@ -1146,96 +1159,13 @@ export const WalletView: React.FC = () => {
         </WalletModalOverlay>
       )}
 
-      {/* MODAL 3: Internal Transfer */}
-      {activeModal === 'transfer' && (
-        <WalletModalOverlay onClose={() => setActiveModal(null)}>
-          <div className="modal-panel-body p-6 space-y-4">
-          <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-            <h3 className="text-sm font-bold text-white flex items-center gap-2">
-              <ArrowRightLeft className="w-4 h-4 text-purple-400" />
-              Internal Wallet Transfer (P2P)
-            </h3>
-            <button onClick={() => setActiveModal(null)} className="text-slate-400 hover:text-white">
-              ✕
-            </button>
-          </div>
-
-          <form onSubmit={handleTransfer} className="space-y-4 text-xs">
-            <div>
-              <label className="block text-slate-300 mb-1">Recipient User ID or Email</label>
-              <input
-                type="text"
-                value={opRecipient}
-                onChange={(e) => setOpRecipient(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white"
-                placeholder="Recipient email address"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-slate-300 mb-1">Currency</label>
-                <select
-                  value={opCurrency}
-                  onChange={(e) => setOpCurrency(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white"
-                >
-                  {currencyOptions.map((opt) => (
-                    <option key={opt.code} value={opt.code}>{opt.code}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-slate-300 mb-1">Amount</label>
-                <input
-                  type="text"
-                  value={opAmount}
-                  onChange={(e) => setOpAmount(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white font-mono"
-                  placeholder="25.00"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-slate-300 mb-1">Transfer Note / Memo</label>
-              <input
-                type="text"
-                value={opDestination}
-                onChange={(e) => setOpDestination(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white"
-                placeholder="Lunch expense reimbursement"
-              />
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setActiveModal(null)}
-                className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="px-4 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-medium shadow"
-              >
-                Send Transfer
-              </button>
-            </div>
-          </form>
-          </div>
-        </WalletModalOverlay>
-      )}
-
-      {/* MODAL 4: FX Currency Exchange */}
+      {/* MODAL 3: FX Currency Exchange */}
       {activeModal === 'convert' && (
         <WalletModalOverlay onClose={() => setActiveModal(null)}>
           <div className="modal-panel-body p-6 space-y-4">
           <div className="flex items-center justify-between pb-2 border-b border-slate-800">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
-              <RefreshCw className="w-4 h-4 text-cyan-400" />
+              <RefreshCw className="w-4 h-4 text-brand-accent" />
               Illustrative Currency Conversion (FX Swap)
             </h3>
             <button onClick={() => setActiveModal(null)} className="text-slate-400 hover:text-white">
@@ -1296,7 +1226,7 @@ export const WalletView: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleGetFxQuote}
-                  className="px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-medium shrink-0"
+                  className="px-3 py-1.5 rounded-lg bg-brand-primary hover:bg-brand-deep text-white font-medium shrink-0"
                 >
                   Get Quote
                 </button>
@@ -1305,10 +1235,10 @@ export const WalletView: React.FC = () => {
 
             {/* Active Quote Card */}
             {currentQuote && (
-              <div className="p-4 rounded-xl bg-slate-950 border border-cyan-800/50 space-y-2 font-mono">
+              <div className="p-4 rounded-xl bg-slate-950 border border-brand-primary/40 space-y-2 font-mono">
                 <div className="flex justify-between text-slate-300">
                   <span className="text-slate-400">Illustrative Rate:</span>
-                  <span className="text-cyan-400 font-bold">1 {fxSrcCurrency} = {currentQuote.exchangeRate} {fxDestCurrency}</span>
+                  <span className="text-brand-accent font-bold">1 {fxSrcCurrency} = {currentQuote.exchangeRate} {fxDestCurrency}</span>
                 </div>
                 <div className="flex justify-between text-slate-300">
                   <span className="text-slate-400">Estimated Received:</span>
@@ -1326,7 +1256,7 @@ export const WalletView: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleExecuteFxConversion}
-                  className="w-full mt-3 py-2 rounded-lg bg-emerald-600 hover:bg-brand-accent-light0 text-white font-sans font-semibold text-xs transition"
+                  className="w-full mt-3 py-2 rounded-lg bg-brand-primary hover:bg-brand-deep text-white font-sans font-semibold text-xs transition"
                 >
                   Execute Conversion Now
                 </button>
@@ -1346,7 +1276,7 @@ export const WalletView: React.FC = () => {
           onClick={() => setWalletActionsOpen(false)}
         >
           <div
-            className="w-full max-w-lg rounded-2xl bg-slate-900 border border-slate-700 p-3 space-y-2 shadow-2xl"
+            className="w-full max-w-lg portal-dark-panel p-3 space-y-2"
             onClick={(event) => event.stopPropagation()}
           >
             <p className="text-xs font-semibold text-slate-400 px-2 pt-1">Choose an action</p>

@@ -11,7 +11,6 @@ import { AvenoraLogo } from '../branding/AvenoraLogo.tsx';
 import {
   LayoutDashboard,
   Wallet,
-  ArrowRightLeft,
   ListOrdered,
   CreditCard,
   FileText,
@@ -45,13 +44,19 @@ type NavItem = {
   icon: React.ComponentType<{ className?: string }>;
 };
 
-function kycSidebarHint(status: AuthUser['kycStatus'] | undefined): { title: string; body: string; cta: string } {
+function kycSidebarHint(status: AuthUser['kycStatus'] | undefined): {
+  title: string;
+  body: string;
+  cta: string;
+  verified: boolean;
+} {
   switch (status) {
     case 'APPROVED':
       return {
         title: 'Identity verified',
-        body: 'Your profile passed internal KYC review. Live settlement is not enabled in prototype mode.',
+        body: 'Your profile passed internal KYC review.',
         cta: 'View verification',
+        verified: true,
       };
     case 'SUBMITTED':
     case 'UNDER_REVIEW':
@@ -60,6 +65,7 @@ function kycSidebarHint(status: AuthUser['kycStatus'] | undefined): { title: str
         title: 'Verification in progress',
         body: 'We are reviewing your documents. You will be notified when the status changes.',
         cta: 'Track status',
+        verified: false,
       };
     case 'NEEDS_MORE_INFORMATION':
     case 'REJECTED':
@@ -67,12 +73,14 @@ function kycSidebarHint(status: AuthUser['kycStatus'] | undefined): { title: str
         title: 'Action required',
         body: 'Additional information is needed to continue identity verification.',
         cta: 'Continue KYC',
+        verified: false,
       };
     default:
       return {
         title: 'Complete verification',
         body: 'Submit identity documents to unlock higher limits when available.',
         cta: 'Start verification',
+        verified: false,
       };
   }
 }
@@ -92,7 +100,6 @@ export const PortalSidebar: React.FC<PortalSidebarProps> = ({
   const primaryItems: NavItem[] = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard },
     { id: 'wallets', label: tabs.wallets.replace('Multicurrency ', ''), icon: Wallet },
-    { id: 'transfers', label: 'Transfers', icon: ArrowRightLeft },
     { id: 'transactions', label: 'Transactions', icon: ListOrdered },
     { id: 'cards', label: tabs.cards, icon: CreditCard },
     { id: 'loans', label: 'Loans', icon: FileText },
@@ -206,13 +213,35 @@ export const PortalSidebar: React.FC<PortalSidebarProps> = ({
       </nav>
 
       <div className="p-4 border-t border-[#E2E8E4]">
-        <div className="rounded-2xl bg-gradient-to-br from-[#E8F6F2] to-white border border-[#19A77A]/20 p-4 space-y-2">
-          <p className="text-xs font-semibold text-[#075B46]">{kycHint.title}</p>
-          <p className="text-[11px] leading-relaxed text-[#68746E]">{kycHint.body}</p>
+        <div
+          className={`rounded-2xl p-4 space-y-2 border ${
+            kycHint.verified
+              ? 'bg-gradient-to-br from-[#E8F6F2] to-white border-[#19A77A]/20'
+              : 'bg-gradient-to-br from-red-50 to-white border-red-200'
+          }`}
+        >
+          <p
+            className={`text-xs font-semibold ${
+              kycHint.verified ? 'text-[#075B46]' : 'text-red-800'
+            }`}
+          >
+            {kycHint.title}
+          </p>
+          <p
+            className={`text-[11px] leading-relaxed ${
+              kycHint.verified ? 'text-[#68746E]' : 'text-red-700/80'
+            }`}
+          >
+            {kycHint.body}
+          </p>
           <button
             type="button"
             onClick={() => handleNav('kyc')}
-            className="text-[11px] font-semibold text-[#075B46] hover:text-[#063D32] flex items-center gap-1 cursor-pointer"
+            className={`text-[11px] font-semibold flex items-center gap-1 cursor-pointer ${
+              kycHint.verified
+                ? 'text-[#075B46] hover:text-[#063D32]'
+                : 'text-red-800 hover:text-red-950'
+            }`}
           >
             {kycHint.cta}
             <ChevronRight className="w-3.5 h-3.5" aria-hidden />

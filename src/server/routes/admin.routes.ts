@@ -43,6 +43,19 @@ const UpdateCustomerRoleSchema = z.object({
   reason: z.string().min(5, 'A documented operational reason of at least 5 characters is required'),
 });
 
+const DeleteCustomerSchema = z.object({
+  reason: z.string().min(5, 'A documented operational reason of at least 5 characters is required'),
+});
+
+const AdminFundingAdjustmentSchema = z.object({
+  direction: z.enum(['CREDIT', 'DEBIT']),
+  currency: z.string().min(2).max(10),
+  amountDecimal: z
+    .string()
+    .regex(/^\d+(\.\d+)?$/, 'Amount must be a positive decimal string'),
+  reason: z.string().min(3).max(2000),
+});
+
 const AdminKycReviewSchema = z.object({
   decision: z.enum(['APPROVED', 'REJECTED', 'NEEDS_MORE_INFORMATION', 'UNDER_REVIEW']),
   notes: z.string().optional(),
@@ -58,6 +71,15 @@ const ReverseTransactionSchema = z.object({
 const AdminCardStatusSchema = z.object({
   status: z.enum(['ACTIVE_SIMULATED', 'FROZEN', 'TERMINATED']),
   reason: z.string().min(5, 'A documented operational reason of at least 5 characters is required'),
+});
+
+const AdminCardIssuanceReviewSchema = z.object({
+  decision: z.enum(['APPROVE', 'DECLINE', 'DELETE']),
+  reason: z.string().min(5, 'A documented reason of at least 5 characters is required'),
+});
+
+const AdminCardDeleteSchema = z.object({
+  reason: z.string().min(5, 'A documented reason of at least 5 characters is required'),
 });
 
 const AdminLoanReviewSchema = z.object({
@@ -136,6 +158,9 @@ adminRouter.get(
       const activeCards = cardsData.cards.filter((c) => c.status === 'ACTIVE_SIMULATED').length;
       const frozenCards = cardsData.cards.filter((c) => c.status === 'FROZEN').length;
       const terminatedCards = cardsData.cards.filter((c) => c.status === 'TERMINATED').length;
+      const pendingCardIssuance = cardsData.cards.filter(
+        (c) => c.status === 'PENDING_REVIEW' || c.status === 'REQUESTED'
+      ).length;
 
       // 6. Pending wallet deposits (hold queue)
       const pendingDepositQueue = defaultWalletService.getPendingDepositsForAdmin({ actorRole: user.role });
@@ -194,6 +219,7 @@ adminRouter.get(
           activeSimulated: activeCards,
           frozen: frozenCards,
           terminated: terminatedCards,
+          pendingIssuance: pendingCardIssuance,
           source: 'CardService Store',
         },
         deposits: {
@@ -375,6 +401,97 @@ adminRouter.patch(
       res.json({
         status: 'role_updated',
         customer: updated,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/customers/:id/delete
+ * Permanently deletes a user account. Roles: ADMIN, SUPER_ADMIN.
+ */
+adminRouter.post(
+  '/customers/:id/delete',
+  authenticate,
+  requireRoles(['ADMIN', 'SUPER_ADMIN']),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const targetUserId = req.params.id!;
+      const validated = DeleteCustomerSchema.parse(req.body ?? {});
+
+      const result = await defaultAuthService.deleteUser({
+        actorUserId: req.user!.id,
+        actorRole: req.user!.role,
+        targetUserId,
+        reason: validated.reason,
+        correlationId: req.headers['x-correlation-id'] as string,
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+      });
+
+      res.json({
+        status: 'customer_deleted',
+        ...result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/customers/:id/funding-adjustment
+ * Queues an admin CREDIT (pending deposit hold) or DEBIT (pending withdrawal hold).
+ * Roles: ADMIN, SUPER_ADMIN. Requires documented reason. Approve/reject via existing queues.
+ */
+adminRouter.post(
+  '/customers/:id/funding-adjustment',
+  authenticate,
+  requireRoles(['ADMIN', 'SUPER_ADMIN']),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const targetUserId = req.params.id!;
+      const validated = AdminFundingAdjustmentSchema.parse(req.body);
+
+      const result = await defaultWalletService.adminRequestFundingAdjustment({
+        targetUserId,
+        direction: validated.direction,
+        currency: validated.currency,
+        amountDecimal: validated.amountDecimal,
+        reason: validated.reason,
+        actorUserId: req.user!.id,
+        actorRole: req.user!.role,
+      });
+
+      if (result.direction === 'CREDIT') {
+        const d = result.deposit;
+        res.status(201).json({
+          status: 'pending_review',
+          direction: 'CREDIT',
+          message:
+            'Admin credit queued as a pending deposit hold. Approve from the deposit queue to move funds to available balance.',
+          deposit: {
+            ...d,
+            submittedAt: d.submittedAt.toISOString(),
+            reviewedAt: d.reviewedAt?.toISOString(),
+          },
+        });
+        return;
+      }
+
+      const w = result.withdrawal;
+      res.status(201).json({
+        status: 'pending_review',
+        direction: 'DEBIT',
+        message:
+          'Admin debit queued as a pending withdrawal hold. Approve from the withdrawal queue to complete the adjustment.',
+        withdrawal: {
+          ...w,
+          submittedAt: w.submittedAt.toISOString(),
+          reviewedAt: w.reviewedAt?.toISOString(),
+        },
       });
     } catch (err) {
       next(err);
@@ -888,6 +1005,87 @@ adminRouter.patch(
       res.json({
         status: 'card_status_updated',
         card: safeCard,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/cards/:id/issuance-review
+ * Approve or decline a customer card issuance request.
+ * Roles: SUPPORT, ADMIN, SUPER_ADMIN. Requires documented reason.
+ */
+adminRouter.post(
+  '/cards/:id/issuance-review',
+  authenticate,
+  requireRoles(['SUPPORT', 'ADMIN', 'SUPER_ADMIN']),
+  (req: Request, res: Response, next: NextFunction): void => {
+    try {
+      const cardId = req.params.id!;
+      const validated = AdminCardIssuanceReviewSchema.parse(req.body);
+
+      if (validated.decision === 'DELETE') {
+        const result = defaultCardService.deleteCard({
+          cardId,
+          actorUserId: req.user!.id,
+          actorRole: req.user!.role,
+          reason: validated.reason,
+        });
+        res.json({
+          status: 'card_deleted',
+          ...result,
+        });
+        return;
+      }
+
+      const updated = defaultCardService.reviewCardIssuance({
+        cardId,
+        actorUserId: req.user!.id,
+        actorRole: req.user!.role,
+        decision: validated.decision,
+        reason: validated.reason,
+      });
+
+      const { syntheticPanFormatted, syntheticCvv, ...safeCard } = updated;
+      res.json({
+        status:
+          validated.decision === 'APPROVE'
+            ? 'card_issuance_approved'
+            : 'card_issuance_declined',
+        card: safeCard,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/cards/:id/delete
+ * Remove a pending/declined/terminated card request from the queue.
+ * Roles: SUPPORT, ADMIN, SUPER_ADMIN. Requires documented reason.
+ */
+adminRouter.post(
+  '/cards/:id/delete',
+  authenticate,
+  requireRoles(['SUPPORT', 'ADMIN', 'SUPER_ADMIN']),
+  (req: Request, res: Response, next: NextFunction): void => {
+    try {
+      const cardId = req.params.id!;
+      const validated = AdminCardDeleteSchema.parse(req.body ?? {});
+
+      const result = defaultCardService.deleteCard({
+        cardId,
+        actorUserId: req.user!.id,
+        actorRole: req.user!.role,
+        reason: validated.reason,
+      });
+
+      res.json({
+        status: 'card_deleted',
+        ...result,
       });
     } catch (err) {
       next(err);

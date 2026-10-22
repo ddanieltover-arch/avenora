@@ -125,7 +125,7 @@ export const HelpSupportView: React.FC = () => {
 
         <div className="flex items-center gap-2 bg-[#f8fbf9] border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-semibold text-[#003933]">
           <Mail className="w-3.5 h-3.5 text-[#076c64]" />
-          <span>support@avenora.internal</span>
+          <span>support@avenorabank.com</span>
         </div>
       </div>
 

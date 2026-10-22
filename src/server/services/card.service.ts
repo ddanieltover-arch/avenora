@@ -16,11 +16,13 @@
 
 import { Money } from '../../domain/money/Money.ts';
 import { getCurrency, isSupportedCurrency } from '../../domain/money/Currency.ts';
+import { resolveFixedCardSpendLimits } from '../../domain/cards/cardSpendLimits.ts';
 import { UserRole } from './auth.service.ts';
 import { defaultLedgerService } from './ledger.service.ts';
 import { defaultWalletService } from './wallet.service.ts';
 import { assertDoubleEntryInvariant } from '../../domain/ledger/LedgerInvariant.ts';
 import { defaultAuditService } from './audit.service.ts';
+import { defaultAuthService } from './auth.service.ts';
 
 export type CardType = 'DEBIT' | 'CREDIT';
 export type CardForm = 'VIRTUAL' | 'PHYSICAL';
@@ -31,6 +33,7 @@ export type CardStatus =
   | 'ACTIVE_SIMULATED'
   | 'FROZEN'
   | 'TERMINATED'
+  | 'ISSUANCE_DECLINED'
   | 'EXPIRED';
 
 export type HoldStatus = 'PENDING_HOLD' | 'SETTLED_SIMULATED' | 'REVERSED' | 'EXPIRED_RELEASED';
@@ -119,7 +122,8 @@ export class CardService {
   }
 
   /**
-   * Requests and provisions a new simulated card.
+   * Customer requests a card. Stays PENDING_REVIEW until an admin approves issuance.
+   * Credentials are provisioned server-side but not usable until ACTIVE_SIMULATED.
    */
   public requestCard(params: {
     userId: string;
@@ -127,25 +131,35 @@ export class CardService {
     currency: string;
     type?: CardType;
     form?: CardForm;
+    /** Ignored — limits are policy-fixed from USD (or Brazil schedule). */
     dailyLimitDecimal?: string;
+    /** Ignored — limits are policy-fixed from USD (or Brazil schedule). */
     singleTxLimitDecimal?: string;
+    countryCode?: string;
   }): PaymentCardRecord {
     const currency = (params.currency || 'USD').toUpperCase();
     if (!isSupportedCurrency(currency)) {
       throw new Error(`Unsupported card currency: ${currency}`);
     }
 
+    const pendingForUser = Array.from(this.cards.values()).filter(
+      (c) => c.userId === params.userId && c.status === 'PENDING_REVIEW'
+    );
+    if (pendingForUser.length >= 3) {
+      throw new Error(
+        'You already have multiple card requests awaiting admin approval. Please wait for a decision before requesting another.'
+      );
+    }
+
     const { full, masked, lastFour } = this.generateSyntheticPan();
     const type = params.type || 'DEBIT';
     const form = params.form || 'VIRTUAL';
 
-    const dailyLimit = params.dailyLimitDecimal
-      ? Money.fromDecimalString(params.dailyLimitDecimal, currency)
-      : Money.fromMinor(100000n, currency); // $1,000.00 default
-
-    const singleLimit = params.singleTxLimitDecimal
-      ? Money.fromDecimalString(params.singleTxLimitDecimal, currency)
-      : Money.fromMinor(50000n, currency); // $500.00 default
+    const user = defaultAuthService.getUserById(params.userId);
+    const countryCode = (params.countryCode || user?.countryCode || '').toUpperCase();
+    const fixedLimits = resolveFixedCardSpendLimits({ currency, countryCode });
+    const dailyLimit = Money.fromDecimalString(fixedLimits.monthlyLimitDecimal, currency);
+    const singleLimit = Money.fromDecimalString(fixedLimits.singleTxLimitDecimal, currency);
 
     const id = `card_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const card: PaymentCardRecord = {
@@ -154,7 +168,7 @@ export class CardService {
       walletAccountId: `wacc_${params.userId}_${currency.toLowerCase()}`,
       type,
       form,
-      status: 'ACTIVE_SIMULATED',
+      status: 'PENDING_REVIEW',
       currency,
       maskedPan: masked,
       lastFour,
@@ -174,8 +188,8 @@ export class CardService {
           id: `cevent_${Date.now()}`,
           cardId: id,
           previousStatus: 'REQUESTED',
-          newStatus: 'ACTIVE_SIMULATED',
-          reason: 'Card issued',
+          newStatus: 'PENDING_REVIEW',
+          reason: 'Card issuance requested — awaiting admin approval',
           actorUserId: params.userId,
           createdAt: new Date(),
         },
@@ -185,7 +199,159 @@ export class CardService {
     };
 
     this.cards.set(id, card);
+
+    defaultAuditService.logAction({
+      action: 'CARD_REQUESTED',
+      actorUserId: params.userId,
+      actorRole: 'CUSTOMER',
+      resourceType: 'PAYMENT_CARD',
+      resourceId: card.id,
+      previousState: 'REQUESTED',
+      newState: 'PENDING_REVIEW',
+      reason: 'Customer requested card issuance',
+      details: {
+        currency: card.currency,
+        type: card.type,
+        form: card.form,
+        cardLastFour: card.lastFour,
+      },
+    });
+
     return card;
+  }
+
+  /**
+   * Admin approves or declines a pending card issuance request.
+   * Only APPROVE moves the card to ACTIVE_SIMULATED (issued).
+   */
+  public reviewCardIssuance(params: {
+    cardId: string;
+    actorUserId: string;
+    actorRole: UserRole;
+    decision: 'APPROVE' | 'DECLINE';
+    reason: string;
+  }): PaymentCardRecord {
+    const allowed: UserRole[] = ['SUPPORT', 'ADMIN', 'SUPER_ADMIN'];
+    if (!allowed.includes(params.actorRole)) {
+      throw new Error('Access denied: only Support, Admin, or Super Admin can review card issuance.');
+    }
+    if (!params.reason || params.reason.trim().length < 5) {
+      throw new Error('A documented reason of at least 5 characters is required for issuance review.');
+    }
+
+    const card = this.cards.get(params.cardId);
+    if (!card) throw new Error('Card not found.');
+    if (card.status !== 'PENDING_REVIEW' && card.status !== 'REQUESTED') {
+      throw new Error(
+        `Card "${params.cardId}" is not awaiting issuance review (current status: ${card.status}).`
+      );
+    }
+
+    const prevStatus = card.status;
+    const newStatus: CardStatus =
+      params.decision === 'APPROVE' ? 'ACTIVE_SIMULATED' : 'ISSUANCE_DECLINED';
+    card.status = newStatus;
+    card.updatedAt = new Date();
+
+    card.stateEvents.push({
+      id: `cevent_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      cardId: card.id,
+      previousStatus: prevStatus,
+      newStatus,
+      reason: params.reason.trim(),
+      actorUserId: params.actorUserId,
+      createdAt: new Date(),
+    });
+
+    defaultAuditService.logAction({
+      action: 'CARD_STATUS_CHANGED',
+      actorUserId: params.actorUserId,
+      actorRole: params.actorRole,
+      resourceType: 'PAYMENT_CARD',
+      resourceId: card.id,
+      previousState: prevStatus,
+      newState: newStatus,
+      reason: params.reason.trim(),
+      details: {
+        decision: params.decision,
+        cardLastFour: card.lastFour,
+        currency: card.currency,
+        userId: card.userId,
+        issuanceReview: true,
+      },
+    });
+
+    return card;
+  }
+
+  /**
+   * Permanently deletes a card request (or declined/terminated record) from the queue.
+   * Active cards with open authorization holds cannot be deleted.
+   */
+  public deleteCard(params: {
+    cardId: string;
+    actorUserId: string;
+    actorRole: UserRole;
+    reason: string;
+  }): { deletedCardId: string; previousStatus: CardStatus } {
+    const allowed: UserRole[] = ['SUPPORT', 'ADMIN', 'SUPER_ADMIN'];
+    if (!allowed.includes(params.actorRole)) {
+      throw new Error('Access denied: only Support, Admin, or Super Admin can delete card records.');
+    }
+    if (!params.reason || params.reason.trim().length < 5) {
+      throw new Error('A documented reason of at least 5 characters is required to delete a card.');
+    }
+
+    const card = this.cards.get(params.cardId);
+    if (!card) throw new Error('Card not found.');
+
+    const openHolds = card.authorizations.filter((a) => a.holdStatus === 'PENDING_HOLD');
+    if (openHolds.length > 0) {
+      throw new Error('Cannot delete a card that still has open authorization holds. Release or settle holds first.');
+    }
+
+    const previousStatus = card.status;
+    for (const auth of card.authorizations) {
+      this.authorizations.delete(auth.id);
+    }
+    this.cards.delete(params.cardId);
+
+    defaultAuditService.logAction({
+      action: 'CARD_DELETED',
+      actorUserId: params.actorUserId,
+      actorRole: params.actorRole,
+      resourceType: 'PAYMENT_CARD',
+      resourceId: params.cardId,
+      previousState: previousStatus,
+      newState: 'DELETED',
+      reason: params.reason.trim(),
+      details: {
+        userId: card.userId,
+        currency: card.currency,
+        type: card.type,
+        form: card.form,
+        cardLastFour: card.lastFour,
+        cardholderName: card.syntheticCardholderName,
+      },
+    });
+
+    return { deletedCardId: params.cardId, previousStatus };
+  }
+
+  /**
+   * Redacts full PAN / CVV for cards that have not been approved/issued yet.
+   */
+  public sanitizeCardForCustomer(card: PaymentCardRecord): PaymentCardRecord {
+    if (card.status === 'ACTIVE_SIMULATED' || card.status === 'FROZEN') {
+      return { ...card };
+    }
+    return {
+      ...card,
+      maskedPan: '•••• •••• •••• ••••',
+      lastFour: '••••',
+      syntheticPanFormatted: '•••• •••• •••• ••••',
+      syntheticCvv: '•••',
+    };
   }
 
   /**
@@ -206,8 +372,19 @@ export class CardService {
       throw new Error('Access denied: you can only update your own cards.');
     }
 
-    if (card.status === 'TERMINATED') {
-      throw new Error('Cannot change status of a card that has been permanently TERMINATED.');
+    if (card.status === 'TERMINATED' || card.status === 'ISSUANCE_DECLINED') {
+      throw new Error('Cannot change status of a card that has been permanently closed or declined.');
+    }
+
+    if (card.status === 'PENDING_REVIEW' || card.status === 'REQUESTED') {
+      throw new Error(
+        'This card is awaiting issuance approval. Use the admin issuance review action to approve or decline it.'
+      );
+    }
+
+    // Customers cannot self-activate; freeze/unfreeze only for already-issued cards via staff (customer freeze removed in UI).
+    if (!isStaff && params.newStatus === 'ACTIVE_SIMULATED' && card.status !== 'FROZEN') {
+      throw new Error('Access denied: card activation requires administrator approval.');
     }
 
     const prevStatus = card.status;
@@ -260,12 +437,15 @@ export class CardService {
     if (card.userId !== params.userId) {
       throw new Error('Access denied.');
     }
+    if (card.status !== 'ACTIVE_SIMULATED' && card.status !== 'FROZEN') {
+      throw new Error('Spending limits can only be changed on issued (active or frozen) cards.');
+    }
 
     const dailyLimit = Money.fromDecimalString(params.dailyLimitDecimal, card.currency);
     const singleLimit = Money.fromDecimalString(params.singleTxLimitDecimal, card.currency);
 
     if (singleLimit.greaterThan(dailyLimit)) {
-      throw new Error('Single transaction limit cannot exceed daily spend limit.');
+      throw new Error('Single transaction limit cannot exceed monthly spend limit.');
     }
 
     card.dailySpendLimitMinor = dailyLimit.amountMinor.toString();
@@ -327,7 +507,7 @@ export class CardService {
     const dailyLimit = BigInt(card.dailySpendLimitMinor);
     if (dailySpent + txMoney.amountMinor > dailyLimit) {
       throw new Error(
-        `Card Declination: Transaction would exceed daily limit (${card.formattedDailyLimit}). Daily spent so far: ${Money.fromMinor(dailySpent, card.currency).toDisplayString()}.`
+        `Card Declination: Transaction would exceed monthly limit (${card.formattedDailyLimit}). Monthly spent so far: ${Money.fromMinor(dailySpent, card.currency).toDisplayString()}.`
       );
     }
 

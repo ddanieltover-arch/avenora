@@ -693,19 +693,23 @@ export class SyntheticIdentifierProvider implements IIdentifierProvider {
 
       case 'BR': {
         if (type === 'BANK_ACCOUNT') {
-          const banco = '001'; // Banco do Brasil
-          const agencia = '1607';
+          // FEBRABAN-style: unique COMPE bank code, 4-digit branch, account + mod-11 check digit.
+          const banco = ((seq % 899) + 1).toString().padStart(3, '0');
+          const agencia = (((seq * 17) % 9000) + 1000).toString().padStart(4, '0');
           const contaSeq = (10000 + (seq % 89999)).toString();
-          // Mod 11 check digit for Brazilian account
           let sum = 0;
           for (let i = 0; i < contaSeq.length; i++) {
             sum += parseInt(contaSeq[i] ?? '0', 10) * (contaSeq.length + 1 - i);
           }
-          const cd = (sum % 11 === 10 ? 'X' : (sum % 11).toString());
+          const cd = sum % 11 === 10 ? 'X' : (sum % 11).toString();
           const contaFormatted = `${contaSeq}-${cd}`;
-          const formatted = `Banco: ${banco} · Agência: ${agencia} · Conta: ${contaFormatted}`;
-          const raw = `${banco}${agencia}${contaSeq}${cd}`;
-          const masked = `Banco: ${banco} · Ag: **** · Conta: *****-${cd}`;
+          // Unique phone-style Pix key (DDD + 9-digit mobile), e.g. 51999157858
+          const ddd = (11 + (seq % 79)).toString().padStart(2, '0');
+          const mobile = (900_000_000 + ((seq * 13) % 100_000_000)).toString().padStart(9, '0');
+          const pixKey = `${ddd}${mobile}`;
+          const formatted = `Banco: ${banco} · Agência: ${agencia} · Conta: ${contaFormatted} · Pix: ${pixKey}`;
+          const raw = `${banco}${agencia}${contaSeq}${cd}|pix:${pixKey}`;
+          const masked = `Banco: ${banco} · Ag: **** · Conta: *****-${cd} · Pix: ****${pixKey.slice(-4)}`;
 
           return {
             countryCode,
@@ -713,7 +717,7 @@ export class SyntheticIdentifierProvider implements IIdentifierProvider {
             formattedValue: formatted,
             rawValue: raw,
             maskedValue: masked,
-            components: { banco, agencia, conta: contaFormatted, bankName: 'Banco do Brasil S.A. (Prototype)' },
+            components: { banco, agencia, conta: contaFormatted, pixKey },
             isSimulated: true,
             disclaimer,
             generatedAt,
@@ -742,10 +746,12 @@ export class SyntheticIdentifierProvider implements IIdentifierProvider {
         }
 
         if (type === 'PIX_KEY') {
-          const pixSuffix = `${seq.toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
-          const formatted = `avenora-demo-pix-${pixSuffix}@prototype.internal`;
-          const raw = formatted;
-          const masked = `avenora-demo-***@prototype.internal`;
+          const ddd = (11 + (seq % 79)).toString().padStart(2, '0');
+          const mobile = (900_000_000 + ((seq * 31) % 100_000_000)).toString().padStart(9, '0');
+          const pixKey = `${ddd}${mobile}`;
+          const formatted = pixKey;
+          const raw = `pix:${pixKey}`;
+          const masked = `****${pixKey.slice(-4)}`;
 
           return {
             countryCode,
@@ -753,7 +759,7 @@ export class SyntheticIdentifierProvider implements IIdentifierProvider {
             formattedValue: formatted,
             rawValue: raw,
             maskedValue: masked,
-            components: { pixType: 'RANDOM_EVP_SYNTHETIC', domain: 'prototype.internal' },
+            components: { pixKey, pixType: 'PHONE' },
             isSimulated: true,
             disclaimer,
             generatedAt,

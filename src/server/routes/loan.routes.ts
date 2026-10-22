@@ -7,6 +7,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { defaultLoanService } from '../services/loan.service.ts';
 import { authenticate, requireRoles } from '../middleware/auth.ts';
+import { requireTransactionEligible } from '../middleware/accountAccess.ts';
 
 export const loanRouter = Router();
 
@@ -165,7 +166,7 @@ loanRouter.post('/applications', authenticate, (req: Request, res: Response, nex
 /**
  * POST /api/v1/loans/applications/:id/submit
  */
-loanRouter.post('/applications/:id/submit', authenticate, (req: Request, res: Response, next: NextFunction): void => {
+loanRouter.post('/applications/:id/submit', authenticate, requireTransactionEligible, (req: Request, res: Response, next: NextFunction): void => {
   try {
     const user = req.user!;
     const appId = req.params.id!;
@@ -182,7 +183,7 @@ loanRouter.post('/applications/:id/submit', authenticate, (req: Request, res: Re
 /**
  * POST /api/v1/loans/applications/:id/cancel
  */
-loanRouter.post('/applications/:id/cancel', authenticate, (req: Request, res: Response, next: NextFunction): void => {
+loanRouter.post('/applications/:id/cancel', authenticate, requireTransactionEligible, (req: Request, res: Response, next: NextFunction): void => {
   try {
     const user = req.user!;
     const appId = req.params.id!;

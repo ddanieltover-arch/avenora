@@ -7,6 +7,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { defaultGrantService } from '../services/grant.service.ts';
 import { authenticate, requireRoles } from '../middleware/auth.ts';
+import { requireTransactionEligible } from '../middleware/accountAccess.ts';
 
 export const grantRouter = Router();
 
@@ -208,7 +209,7 @@ grantRouter.post('/applications', authenticate, (req: Request, res: Response, ne
 /**
  * POST /api/v1/grants/applications/:id/submit
  */
-grantRouter.post('/applications/:id/submit', authenticate, (req: Request, res: Response, next: NextFunction): void => {
+grantRouter.post('/applications/:id/submit', authenticate, requireTransactionEligible, (req: Request, res: Response, next: NextFunction): void => {
   try {
     const user = req.user!;
     const appId = req.params.id!;

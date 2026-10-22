@@ -19,13 +19,11 @@ import type {
   PortalTransactionSummary,
 } from '../../hooks/usePortalDashboardData.ts';
 import type { WalletAccountLike } from '../../hooks/useCustomerWalletScope.ts';
-import { DomesticBankAccountCard } from './DomesticBankAccountCard.tsx';
+import type { WalletDeepLinkModal } from '../WalletView.tsx';
+import { useDomesticBankAccount } from '../../hooks/useDomesticBankAccount.ts';
 import {
-  ArrowRightLeft,
   Eye,
   EyeOff,
-  Globe,
-  PlusCircle,
   Printer,
   Wallet,
   CreditCard,
@@ -34,7 +32,13 @@ import {
   ShieldCheck,
   AlertCircle,
   ChevronRight,
-  RefreshCw,
+  Mail,
+  Copy,
+  Check,
+  Building2,
+  Siren,
+  ArrowDownLeft,
+  ArrowUpRight,
 } from 'lucide-react';
 
 const CHART_COLORS = ['#075B46', '#19A77A', '#3B82F6', '#8B5CF6', '#F59E0B', '#64748B'];
@@ -55,6 +59,7 @@ interface DashboardOverviewProps {
   error: string | null;
   onRetry: () => void;
   onTabChange: (tab: PortalTabId) => void;
+  onOpenWalletModal?: (modal: WalletDeepLinkModal) => void;
 }
 
 function monthKey(date: Date): string {
@@ -107,12 +112,34 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
   transactions,
   loading,
   error,
-  onRetry,
+  onRetry: _onRetry,
   onTabChange,
+  onOpenWalletModal,
 }) => {
   const [balanceVisible, setBalanceVisible] = useState(true);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const { data: domesticAccount, loading: domesticLoading } = useDomesticBankAccount();
   const greeting = timeOfDayGreeting();
   const kyc = kycStatusPresentation(user?.kycStatus);
+  const domesticFields =
+    domesticAccount?.generationStatus === 'GENERATED' ? domesticAccount.displayFields ?? [] : [];
+  const domesticCountry =
+    domesticAccount?.verifiedCountryCode || user?.countryCode || primaryFiat;
+  const kycAlertNeeded =
+    !domesticLoading &&
+    domesticFields.length === 0 &&
+    user?.kycStatus !== 'APPROVED' &&
+    domesticAccount?.generationStatus !== 'PENDING_GENERATION';
+
+  const copyDomesticValue = async (key: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedKey(key);
+      window.setTimeout(() => setCopiedKey(null), 2000);
+    } catch {
+      /* clipboard unavailable */
+    }
+  };
 
   const monthlyActivity = useMemo(() => {
     const buckets = new Map<string, number>();
@@ -173,41 +200,41 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
       .slice(0, 6);
   }, [transactions]);
 
-  const quickActions = [
-    {
-      label: 'Transfer money',
-      sub: 'Internal corridors',
-      icon: ArrowRightLeft,
-      tint: 'bg-[#E8F6F2] text-[#075B46]',
-      tab: 'transfers' as PortalTabId,
-    },
-    {
-      label: 'Exchange currency',
-      sub: 'FX quotes',
-      icon: Globe,
-      tint: 'bg-teal-50 text-teal-800',
-      tab: 'wallets' as PortalTabId,
-    },
+  const quickActions: Array<{
+    label: string;
+    sub: string;
+    icon: React.ComponentType<{ className?: string }>;
+    tint: string;
+    tab?: PortalTabId;
+    walletModal?: WalletDeepLinkModal;
+  }> = [
     {
       label: 'View wallets',
       sub: 'Balances',
       icon: Wallet,
       tint: 'bg-emerald-50 text-emerald-800',
-      tab: 'wallets' as PortalTabId,
+      tab: 'wallets',
     },
     {
-      label: 'Add demo funds',
+      label: 'Deposit funds',
       sub: 'Simulated only',
-      icon: PlusCircle,
-      tint: 'bg-amber-50 text-amber-900',
-      tab: 'wallets' as PortalTabId,
+      icon: ArrowDownLeft,
+      tint: 'bg-[#E8F6F2] text-[#075B46]',
+      walletModal: 'deposit',
+    },
+    {
+      label: 'Withdraw funds',
+      sub: 'Bank or BTC',
+      icon: ArrowUpRight,
+      tint: 'bg-teal-50 text-teal-800',
+      walletModal: 'withdraw',
     },
     {
       label: 'Statements',
       sub: 'PDF / CSV',
       icon: Printer,
       tint: 'bg-indigo-50 text-indigo-800',
-      tab: 'statements' as PortalTabId,
+      tab: 'statements',
     },
   ];
 
@@ -239,78 +266,192 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
             <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" aria-hidden />
             <span>{error}</span>
           </div>
-          <button
-            type="button"
-            onClick={onRetry}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-rose-200 text-xs font-semibold hover:bg-rose-100 cursor-pointer"
+          <a
+            href="mailto:support@avenorabank.com?subject=Account%20suspension%20support"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-rose-200 text-xs font-semibold hover:bg-rose-100 shrink-0"
           >
-            <RefreshCw className="w-3.5 h-3.5" aria-hidden />
-            Retry
-          </button>
+            <Mail className="w-3.5 h-3.5" aria-hidden />
+            Email support
+          </a>
         </div>
       )}
 
-      {/* Portfolio hero */}
+      {/* Portfolio hero — balance left, domestic account details right (below visibility toggle) */}
       <section
         className="relative overflow-hidden rounded-[22px] bg-gradient-to-br from-[#063D32] via-[#075B46] to-[#19A77A] text-white p-6 sm:p-8 shadow-lg"
         aria-labelledby="portfolio-hero-title"
       >
         <div className="absolute -right-8 -top-8 w-48 h-48 rounded-full bg-white/5 blur-2xl pointer-events-none" aria-hidden />
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10">
-          <div className="space-y-3 max-w-xl">
-            <p className="text-xs text-emerald-100/90">
-              {greeting}, {customerGreetingName(user?.fullName)}
-            </p>
-            <h2 id="portfolio-hero-title" className="text-2xl sm:text-3xl font-serif font-bold tracking-tight">
-              Available balance
-            </h2>
-            <p className="text-[10px] text-emerald-100/80">Primary wallet · {primaryFiat}</p>
-            {walletsSummary.length > 1 && (
-              <p className="text-[10px] text-emerald-100/75">
-                {walletsSummary.length} currencies · balances shown separately (no combined FX total)
+        <div className="relative z-10 flex flex-col lg:flex-row lg:items-stretch gap-6 lg:gap-8">
+          <div className="min-w-0 flex-1 space-y-5">
+            <div>
+              <p className="text-xs text-emerald-100/90">
+                {greeting}, {customerGreetingName(user?.fullName)}
               </p>
+              <h2 id="portfolio-hero-title" className="text-sm sm:text-base font-medium text-emerald-100/95 mt-1">
+                Available balance
+              </h2>
+            </div>
+
+            <p
+              className="text-4xl sm:text-5xl font-serif font-bold tabular-nums tracking-tight text-white break-all"
+              data-financial-amount="true"
+            >
+              {balanceVisible ? primaryFiatBalanceDisplay : '••••••'}
+            </p>
+
+            <p className="text-xs text-emerald-100/90 tabular-nums" data-financial-amount="true">
+              ≈ {balanceVisible ? primaryFiatBtcEquivalentDisplay : '••••'}
+            </p>
+
+            {primaryFiatHasHold && primaryFiatHoldDisplay && (
+              <p className="text-[11px] text-amber-100/95 tabular-nums" data-financial-amount="true">
+                Hold (pending): {balanceVisible ? primaryFiatHoldDisplay : '••••'}
+              </p>
+            )}
+
+            {walletsSummary.length > 0 && (
+              <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                {walletsSummary.map((account, idx) => {
+                  const code = (account.currency || account.currencyCode || '').toUpperCase();
+                  return (
+                    <li
+                      key={`${code}-${idx}`}
+                      className="rounded-xl bg-white/10 border border-white/20 px-3 py-2.5 flex items-center justify-between gap-3"
+                    >
+                      <span className="text-xs font-semibold text-emerald-50">{code || '—'}</span>
+                      <span
+                        className="text-sm sm:text-base font-serif font-bold text-white tabular-nums"
+                        data-financial-amount="true"
+                      >
+                        {balanceVisible ? formatWalletAccountBalance(account) : '••••'}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
             )}
           </div>
 
-          <div className="rounded-2xl bg-white/10 border border-white/20 backdrop-blur-sm p-5 min-w-[14rem]">
-            <div className="flex items-center justify-between gap-3 mb-1">
-              <span className="text-xs text-emerald-100/90 font-medium">Primary wallet · {primaryFiat}</span>
+          <aside className="w-full lg:w-[min(100%,20rem)] shrink-0 flex flex-col gap-3">
+            <div className="flex justify-end">
               <button
                 type="button"
                 onClick={() => setBalanceVisible((v) => !v)}
-                className="p-1.5 rounded-lg hover:bg-white/10 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
+                className="p-2 rounded-xl bg-white/10 hover:bg-white/15 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 shrink-0"
                 aria-label={balanceVisible ? 'Hide balance' : 'Show balance'}
               >
                 {balanceVisible ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
               </button>
             </div>
-            <p className="text-3xl sm:text-4xl font-serif font-bold tabular-nums" data-financial-amount="true">
-              {balanceVisible ? primaryFiatBalanceDisplay : '••••••'}
-            </p>
-            <p className="text-xs text-emerald-100/90 mt-2 tabular-nums" data-financial-amount="true">
-              ≈ {balanceVisible ? primaryFiatBtcEquivalentDisplay : '••••'}
-              <span className="text-emerald-100/70"> · illustrative FX</span>
-            </p>
-            {primaryFiatHasHold && primaryFiatHoldDisplay && (
-              <p className="text-[11px] text-amber-100/95 mt-2 tabular-nums" data-financial-amount="true">
-                Hold (pending): {balanceVisible ? primaryFiatHoldDisplay : '••••'}
-              </p>
-            )}
-          </div>
+
+            <div
+              className={`rounded-2xl border p-4 space-y-3 flex-1 ${
+                kycAlertNeeded
+                  ? 'animate-kyc-siren text-white'
+                  : 'bg-white/10 border-white/20'
+              }`}
+              role={kycAlertNeeded ? 'alert' : undefined}
+              aria-live={kycAlertNeeded ? 'polite' : undefined}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  {kycAlertNeeded ? (
+                    <Siren
+                      className="w-4 h-4 text-red-100 shrink-0 animate-kyc-siren-icon"
+                      aria-hidden
+                    />
+                  ) : (
+                    <Building2 className="w-4 h-4 text-emerald-100 shrink-0" aria-hidden />
+                  )}
+                  <p className="text-xs font-semibold text-white truncate">
+                    {kycAlertNeeded ? 'Verification required' : 'Domestic account'}
+                  </p>
+                </div>
+                <span
+                  className={`text-[10px] font-bold uppercase tracking-wide shrink-0 ${
+                    kycAlertNeeded ? 'text-red-100' : 'text-emerald-100/80'
+                  }`}
+                >
+                  {domesticCountry}
+                </span>
+              </div>
+
+              {domesticLoading && domesticFields.length === 0 ? (
+                <p className="text-[11px] text-emerald-100/80">Loading account details…</p>
+              ) : domesticFields.length > 0 ? (
+                <ul className="space-y-2">
+                  {domesticFields.map((field) => (
+                    <li
+                      key={field.key}
+                      className="flex items-center justify-between gap-2 rounded-xl bg-black/15 border border-white/10 px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-[10px] text-emerald-100/75">{field.label}</p>
+                        <p className="text-xs font-mono font-semibold text-white mt-0.5 break-all">
+                          {balanceVisible ? field.value : '••••'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => copyDomesticValue(field.key, field.value)}
+                        className="shrink-0 p-1.5 rounded-lg hover:bg-white/10 cursor-pointer"
+                        aria-label={`Copy ${field.label}`}
+                      >
+                        {copiedKey === field.key ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-200" aria-hidden />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5 text-emerald-100/80" aria-hidden />
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : kycAlertNeeded ? (
+                <div className="space-y-2">
+                  <p className="text-[11px] text-red-50 leading-relaxed font-medium">
+                    Complete identity verification to unlock your domestic account numbers.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => onTabChange('kyc')}
+                    className="inline-flex items-center gap-1.5 text-[11px] font-bold text-white bg-red-950/40 hover:bg-red-950/55 border border-red-100/40 rounded-lg px-3 py-1.5 cursor-pointer"
+                  >
+                    <Siren className="w-3.5 h-3.5 animate-kyc-siren-icon" aria-hidden />
+                    Open verification now
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-[11px] text-emerald-100/85 leading-relaxed">
+                    {domesticAccount?.generationStatus === 'PENDING_GENERATION'
+                      ? 'Generating your country-format account numbers…'
+                      : 'Account details unavailable. Try refreshing.'}
+                  </p>
+                </div>
+              )}
+            </div>
+          </aside>
         </div>
       </section>
 
-      {/* Quick actions */}
+      {/* Quick actions — desktop card style, four equal columns */}
       <section aria-label="Quick actions">
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 w-full">
           {quickActions.map((action) => {
             const Icon = action.icon;
             return (
               <button
                 key={action.label}
                 type="button"
-                onClick={() => onTabChange(action.tab)}
-                className="group flex flex-col items-center text-center p-4 rounded-2xl bg-white border border-[#E2E8E4]/80 shadow-sm hover:shadow-md hover:border-[#19A77A]/30 transition cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#19A77A]/40"
+                onClick={() => {
+                  if (action.walletModal && onOpenWalletModal) {
+                    onOpenWalletModal(action.walletModal);
+                    return;
+                  }
+                  if (action.tab) onTabChange(action.tab);
+                }}
+                className="group flex flex-col items-center text-center p-4 rounded-2xl bg-white border border-[#E2E8E4]/80 shadow-sm hover:shadow-md hover:border-[#19A77A]/30 transition cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#19A77A]/40 w-full"
               >
                 <span
                   className={`w-11 h-11 rounded-full flex items-center justify-center mb-2 ${action.tint} group-hover:scale-105 transition-transform`}
@@ -459,11 +600,6 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
                         {formatWalletAccountBalance(account)}
                       </span>
                     </div>
-                    {account.accountNumber && (
-                      <p className="font-mono text-[10px] text-[#68746E] truncate" title={account.accountNumber}>
-                        {account.accountNumber}
-                      </p>
-                    )}
                     {onHold && (
                       <p className="text-[10px] text-amber-800 tabular-nums" data-financial-amount="true">
                         Hold: {formatWalletAccountHold(account)}
@@ -539,8 +675,6 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
               </ul>
             )}
           </article>
-
-          <DomesticBankAccountCard onNavigateToKyc={() => onTabChange('kyc')} />
 
           {/* KYC */}
           <article className="bg-white rounded-[20px] border border-[#E2E8E4]/80 shadow-sm p-5">

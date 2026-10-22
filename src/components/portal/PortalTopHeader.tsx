@@ -48,6 +48,12 @@ export const PortalTopHeader: React.FC<PortalTopHeaderProps> = ({
     onTabChange('transactions');
   };
 
+  const displayName =
+    user?.fullName?.trim() ||
+    (user?.email ? user.email.split('@')[0] : '') ||
+    'Account';
+  const avatarLabel = customerInitials(user?.fullName?.trim() || displayName);
+
   const pageTitle = (() => {
     switch (activeTab) {
       case 'overview':
@@ -123,10 +129,10 @@ export const PortalTopHeader: React.FC<PortalTopHeaderProps> = ({
               className="w-9 h-9 rounded-full bg-gradient-to-br from-[#075B46] to-[#19A77A] text-white text-xs font-bold flex items-center justify-center"
               aria-hidden
             >
-              {customerInitials(user?.fullName)}
+              {avatarLabel}
             </span>
             <span className="hidden sm:block text-left max-w-[10rem]">
-              <span className="block text-sm font-semibold text-[#17231F] truncate">{user?.fullName || 'Guest'}</span>
+              <span className="block text-sm font-semibold text-[#17231F] truncate">{displayName}</span>
               <span className="block text-[10px] text-[#68746E] truncate">{user?.email}</span>
             </span>
             <ChevronDown className="w-4 h-4 text-[#68746E] hidden sm:block" aria-hidden />
@@ -138,7 +144,7 @@ export const PortalTopHeader: React.FC<PortalTopHeaderProps> = ({
               role="menu"
             >
               <div className="px-2.5 py-2 border-b border-[#E2E8E4] mb-1">
-                <span className="font-semibold text-[#17231F] block truncate">{user?.fullName}</span>
+                <span className="font-semibold text-[#17231F] block truncate">{displayName}</span>
                 <span className="text-[10px] text-[#68746E] truncate block">{user?.email}</span>
                 {user?.status && (
                   <span className="mt-1 inline-block text-[10px] font-medium px-2 py-0.5 rounded-full bg-[#F1F4F1] text-[#68746E]">

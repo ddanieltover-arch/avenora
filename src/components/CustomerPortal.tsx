@@ -7,17 +7,13 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useCustomerWalletScope } from '../hooks/useCustomerWalletScope.ts';
 import { usePortalDashboardData } from '../hooks/usePortalDashboardData.ts';
 import {
-  formatWalletAccountBalance,
-  formatWalletAccountHold,
-  walletHoldMinorPositive,
-} from '../lib/walletDisplay.ts';
-import {
-  formatIllustrativeEquivalent,
-  walletAvailableMajor,
+  formatMajorBalance,
+  portfolioHoldMajor,
+  portfolioValueMajor,
 } from '../lib/illustrativeFx.ts';
 import { useLocalization } from './LocalizationContext.tsx';
 import { useAuth } from './AuthContext.tsx';
-import { WalletView } from './WalletView.tsx';
+import { WalletView, type WalletDeepLinkModal } from './WalletView.tsx';
 import { CardManagementView } from './CardManagementView.tsx';
 import { LoanManagementView } from './LoanManagementView.tsx';
 import { GrantManagementView } from './GrantManagementView.tsx';
@@ -27,7 +23,6 @@ import { ZeroFloatDemo } from './ZeroFloatDemo.tsx';
 import { WebhookConsole } from './WebhookConsole.tsx';
 import { HealthStatusCard } from './HealthStatusCard.tsx';
 import { SecurityCompliance } from './SecurityCompliance.tsx';
-import { TransfersView } from './TransfersView.tsx';
 import { TransactionsView } from './TransactionsView.tsx';
 import { StatementsView } from './StatementsView.tsx';
 import { ProfileSecurityView } from './ProfileSecurityView.tsx';
@@ -37,6 +32,9 @@ import type { PortalTabId } from '../routing/appRoutes.ts';
 import { PortalSidebar } from './portal/PortalSidebar.tsx';
 import { PortalTopHeader } from './portal/PortalTopHeader.tsx';
 import { DashboardOverview } from './portal/DashboardOverview.tsx';
+import { AccountSuspendedBanner } from './portal/AccountSuspendedBanner.tsx';
+import { AccountPendingVerificationBanner } from './portal/AccountPendingVerificationBanner.tsx';
+import { AccountLockedModal } from './portal/AccountLockedModal.tsx';
 import { PortalBottomNav } from './portal/mobile/PortalBottomNav.tsx';
 import { PortalMobileHeader } from './portal/mobile/PortalMobileHeader.tsx';
 import { DashboardMobileHome } from './portal/mobile/DashboardMobileHome.tsx';
@@ -51,11 +49,19 @@ interface CustomerPortalProps {
 
 export const CustomerPortal: React.FC<CustomerPortalProps> = ({ activeTab, onTabChange, onOpenAdmin }) => {
   const { t } = useLocalization();
-  const { user, token, logout } = useAuth();
-  const { primaryFiat, primaryFiatMeta, walletCurrencyCodes } = useCustomerWalletScope();
+  const { user, token, logout, refreshUser } = useAuth();
+  const { primaryFiat, walletCurrencyCodes } = useCustomerWalletScope();
   const [pendingTxSearch, setPendingTxSearch] = useState<string | null>(null);
+  const [pendingWalletModal, setPendingWalletModal] = useState<WalletDeepLinkModal | null>(null);
   const [mobileProfileSecurity, setMobileProfileSecurity] = useState(false);
   const mobileMainRef = useRef<HTMLElement>(null);
+  const isSuspended = user?.status === 'SUSPENDED';
+  const isLocked = user?.status === 'LOCKED';
+  const isPendingVerification =
+    !isSuspended &&
+    !isLocked &&
+    (user?.status === 'PENDING_VERIFICATION' ||
+      (user?.role === 'CUSTOMER' && user?.kycStatus !== 'APPROVED'));
 
   const {
     walletsSummary,
@@ -79,6 +85,29 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ activeTab, onTab
   }, [activeTab]);
 
   useEffect(() => {
+    if (activeTab === 'transfers') {
+      onTabChange('wallets');
+    }
+  }, [activeTab, onTabChange]);
+
+  // Keep account status current so suspend/lock notices appear without a full re-login.
+  useEffect(() => {
+    if (!token) return;
+    void refreshUser();
+    const id = window.setInterval(() => {
+      void refreshUser();
+    }, 20_000);
+    const onFocus = () => {
+      void refreshUser();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [token, refreshUser]);
+
+  useEffect(() => {
     if (activeTab === 'overview' && token) {
       refetchDashboard();
     }
@@ -88,25 +117,43 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ activeTab, onTab
     mobileMainRef.current?.scrollTo({ top: 0, behavior: 'auto' });
   }, [activeTab]);
 
-  const fiatWallet = useMemo(
-    () =>
-      walletsSummary.find((a) => (a.currency || a.currencyCode || '').toUpperCase() === primaryFiat),
+  const primaryPortfolioMajor = useMemo(
+    () => portfolioValueMajor(walletsSummary, primaryFiat),
     [walletsSummary, primaryFiat],
   );
-  const primaryFiatBalanceDisplay = fiatWallet
-    ? formatWalletAccountBalance(fiatWallet)
-    : `${primaryFiatMeta.symbol}0${primaryFiatMeta.minorUnits === 0 ? '' : '.00'}`;
-  const fiatAvailableMajor = fiatWallet ? walletAvailableMajor(fiatWallet) : 0;
-  const primaryFiatBtcEquivalentDisplay = formatIllustrativeEquivalent(
-    fiatAvailableMajor,
-    primaryFiat,
-    'BTC',
+  const primaryPortfolioBtcMajor = useMemo(
+    () => portfolioValueMajor(walletsSummary, 'BTC'),
+    [walletsSummary],
   );
-  const primaryFiatHoldDisplay = fiatWallet ? formatWalletAccountHold(fiatWallet) : null;
-  const primaryFiatHasHold = fiatWallet ? walletHoldMinorPositive(fiatWallet) : false;
+  const primaryHoldMajor = useMemo(
+    () => portfolioHoldMajor(walletsSummary, primaryFiat),
+    [walletsSummary, primaryFiat],
+  );
+  const primaryFiatBalanceDisplay =
+    walletsSummary.length === 0 ? '—' : formatMajorBalance(primaryPortfolioMajor, primaryFiat);
+  const primaryFiatBtcEquivalentDisplay = formatMajorBalance(primaryPortfolioBtcMajor, 'BTC');
+  const primaryFiatHoldDisplay =
+    primaryHoldMajor > 0 ? formatMajorBalance(primaryHoldMajor, primaryFiat) : null;
+  const primaryFiatHasHold = primaryHoldMajor > 0;
 
   const handleTransactionSearch = (query: string) => {
     setPendingTxSearch(query);
+  };
+
+  const openWalletDeepLink = (modal: WalletDeepLinkModal) => {
+    if (isPendingVerification || isSuspended || isLocked) {
+      if (isPendingVerification) onTabChange('kyc');
+      else onTabChange('wallets');
+      return;
+    }
+    setPendingWalletModal(modal);
+    onTabChange('wallets');
+  };
+
+  const walletViewProps = {
+    initialModal: pendingWalletModal,
+    onInitialModalConsumed: () => setPendingWalletModal(null),
+    onWalletActivity: refetchDashboard,
   };
 
   const dashboardProps = {
@@ -125,13 +172,13 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ activeTab, onTab
     error: dashboardError,
     onRetry: refetchDashboard,
     onTabChange,
+    onOpenWalletModal: openWalletDeepLink,
   };
 
   const renderDesktopTab = () => (
     <>
       {activeTab === 'overview' && <DashboardOverview {...dashboardProps} />}
-      {activeTab === 'wallets' && <WalletView />}
-      {activeTab === 'transfers' && <TransfersView />}
+      {activeTab === 'wallets' && <WalletView {...walletViewProps} />}
       {activeTab === 'transactions' && (
         <TransactionsView
           initialSearchQuery={pendingTxSearch}
@@ -156,8 +203,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ activeTab, onTab
   const renderMobileTab = () => (
     <div className="portal-mobile-narrow portal-page-stack max-w-lg mx-auto w-full">
       {activeTab === 'overview' && <DashboardMobileHome {...dashboardProps} />}
-      {activeTab === 'wallets' && <WalletView />}
-      {activeTab === 'transfers' && <TransfersView />}
+      {activeTab === 'wallets' && <WalletView {...walletViewProps} />}
       {activeTab === 'transactions' && (
         <MobileActivityScreen
           transactions={transactions}
@@ -206,7 +252,13 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ activeTab, onTab
   );
 
   return (
-    <div className="app-viewport-shell bg-[#F1F4F1] text-[#17231F] font-sans">
+    <div
+      className="app-viewport-shell bg-[#F1F4F1] text-[#17231F] font-sans"
+      data-account-status={user?.status || 'ACTIVE'}
+    >
+      {isLocked && <AccountLockedModal onLogout={logout} />}
+
+      <div className={`flex flex-col flex-1 min-h-0 ${isLocked ? 'blur-sm brightness-75 select-none pointer-events-none' : ''}`}>
       <div className="bg-[#063D32] text-emerald-50 text-[10px] sm:text-[11px] py-1 sm:py-1.5 px-4 font-medium tracking-wide shrink-0">
         <div className="flex items-center justify-between gap-4 max-w-[1600px] mx-auto w-full">
           <div className="flex items-center gap-2 truncate">
@@ -219,6 +271,14 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ activeTab, onTab
           </div>
         </div>
       </div>
+
+      {isSuspended && <AccountSuspendedBanner />}
+      {isPendingVerification && (
+        <AccountPendingVerificationBanner
+          kycStatus={user?.kycStatus}
+          onOpenKyc={() => onTabChange('kyc')}
+        />
+      )}
 
       {/* Desktop layout (unchanged) */}
       <div className="hidden lg:flex flex-1 min-h-0 max-w-[1600px] mx-auto w-full overflow-hidden">
@@ -262,6 +322,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ activeTab, onTab
       </div>
 
       <PortalBottomNav activeTab={activeTab} onTabChange={onTabChange} />
+      </div>
     </div>
   );
 };

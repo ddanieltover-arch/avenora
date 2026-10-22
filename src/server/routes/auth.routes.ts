@@ -71,6 +71,17 @@ authRouter.post('/register', async (req: Request, res: Response, next: NextFunct
       userAgent: req.get('user-agent'),
     });
 
+    // Generate domestic bank identifiers only when KYC is already approved (or bypass enabled).
+    try {
+      const { defaultDomesticBankAccountService } = await import('../services/domesticBankAccount.service.ts');
+      await defaultDomesticBankAccountService.ensurePrimaryAccountForActiveUser({
+        userId: result.user.id,
+        correlationId: `register_${result.user.id}`,
+      });
+    } catch {
+      /* Generation failures must not block registration; /me will retry after KYC. */
+    }
+
     // Set secure HttpOnly cookie
     res.cookie('avenora_session', result.sessionToken, {
       httpOnly: true,
@@ -146,6 +157,19 @@ authRouter.post('/login', async (req: Request, res: Response, next: NextFunction
       return;
     }
 
+    // Backfill domestic identifiers when KYC is approved (no-op until then).
+    try {
+      const { defaultDomesticBankAccountService } = await import('../services/domesticBankAccount.service.ts');
+      await defaultDomesticBankAccountService.ensurePrimaryAccountForActiveUser({
+        userId: authResult.user.id,
+        correlationId: `login_${authResult.user.id}`,
+      });
+    } catch {
+      /* non-blocking */
+    }
+
+    const liveUser = defaultAuthService.getUserById(authResult.user.id);
+
     res.cookie('avenora_session', authResult.sessionToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -155,7 +179,14 @@ authRouter.post('/login', async (req: Request, res: Response, next: NextFunction
 
     res.status(200).json({
       status: 'authenticated',
-      user: authResult.user,
+      user: liveUser
+        ? {
+            ...authResult.user,
+            kycStatus: liveUser.kycStatus,
+            status: liveUser.status,
+            countryCode: liveUser.countryCode,
+          }
+        : authResult.user,
       sessionToken: authResult.sessionToken,
       expiresAt: authResult.expiresAt.toISOString(),
     });

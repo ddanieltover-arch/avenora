@@ -177,7 +177,10 @@ export function centralErrorHandler(
     errorMessage.includes('Password must be') ||
     errorMessage.includes('Invalid or expired') ||
     errorMessage.includes('Current password is incorrect') ||
-    errorMessage.includes('Invalid verification code')
+    errorMessage.includes('Invalid verification code') ||
+    errorMessage.includes('Cannot delete') ||
+    errorMessage.includes('documented reason') ||
+    errorMessage.includes('not awaiting issuance')
   ) {
     const response: ProblemDetails = {
       type: 'https://avenora.com/errors/bad-request',

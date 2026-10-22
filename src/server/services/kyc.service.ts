@@ -34,6 +34,8 @@ export interface DocumentReference {
   storageRef: string; // Synthetic encrypted vault URI (e.g. vault://kyc/enc_doc_xxx)
   fileSize: number;
   uploadedAt: Date;
+  /** Staff-only review preview (data URL). Never returned to customers. */
+  previewDataUrl?: string;
 }
 
 export interface ReviewHistoryEvent {
@@ -82,6 +84,8 @@ export interface KycProfileRecord {
   dateOfBirth?: string;
   taxIdType?: string;
   taxIdMasked?: string;
+  /** Full tax ID for compliance review only — stripped from customer responses. */
+  taxIdFull?: string;
   residentialAddress?: {
     street: string;
     city?: string;
@@ -152,14 +156,15 @@ export class KycService {
     };
     documents?: Array<{
       type:
-    | 'PASSPORT'
-    | 'DRIVERS_LICENSE'
-    | 'NATIONAL_ID'
-    | 'PASSPORT_PHOTOGRAPH'
-    | 'PROOF_OF_ADDRESS';
+        | 'PASSPORT'
+        | 'DRIVERS_LICENSE'
+        | 'NATIONAL_ID'
+        | 'PASSPORT_PHOTOGRAPH'
+        | 'PROOF_OF_ADDRESS';
       fileName: string;
       mimeType: string;
       fileSize: number;
+      previewDataUrl?: string;
     }>;
   }): KycProfileRecord {
     const profile = this.getOrCreateProfile(params.userId);
@@ -190,15 +195,24 @@ export class KycService {
       : '***';
 
     // Build document references with private synthetic vault storage references
-    const newDocRefs: DocumentReference[] = (params.documents || []).map((doc) => ({
-      id: `doc_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      type: doc.type,
-      fileName: doc.fileName,
-      mimeType: doc.mimeType,
-      storageRef: `vault://kyc/${new Date().getFullYear()}/${params.userId}/${Math.random().toString(36).substring(2, 10)}.enc`,
-      fileSize: doc.fileSize,
-      uploadedAt: new Date(),
-    }));
+    const newDocRefs: DocumentReference[] = (params.documents || []).map((doc) => {
+      const preview =
+        typeof doc.previewDataUrl === 'string' &&
+        doc.previewDataUrl.startsWith('data:') &&
+        doc.previewDataUrl.length <= 1_800_000
+          ? doc.previewDataUrl
+          : undefined;
+      return {
+        id: `doc_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        type: doc.type,
+        fileName: doc.fileName,
+        mimeType: doc.mimeType,
+        storageRef: `vault://kyc/${new Date().getFullYear()}/${params.userId}/${Math.random().toString(36).substring(2, 10)}.enc`,
+        fileSize: doc.fileSize,
+        uploadedAt: new Date(),
+        ...(preview ? { previewDataUrl: preview } : {}),
+      };
+    });
 
     const isResubmission = profile.status === 'REJECTED' || profile.status === 'NEEDS_MORE_INFORMATION';
 
@@ -213,8 +227,10 @@ export class KycService {
     profile.dateOfBirth = params.dateOfBirth;
     profile.taxIdType = taxIdType;
     profile.taxIdMasked = masked;
+    profile.taxIdFull = cleanTaxId;
     profile.residentialAddress = params.residentialAddress;
-    profile.documentRefs = [...profile.documentRefs, ...newDocRefs];
+    // Resubmissions replace prior document set so reviewers see the latest pack
+    profile.documentRefs = newDocRefs.length > 0 ? newDocRefs : profile.documentRefs;
     profile.submittedAt = new Date();
     profile.rejectionReason = undefined;
     profile.updatedAt = new Date();
@@ -230,11 +246,12 @@ export class KycService {
       timestamp: new Date(),
     });
 
-    // Update user record kycStatus
+    // Update user record kycStatus — account stays inactive until admin approval
     const user = defaultAuthService.getUserById(params.userId);
     if (user) {
       user.kycStatus = 'SUBMITTED';
       user.updatedAt = new Date();
+      defaultAuthService.syncCustomerActivationFromKyc(params.userId);
     }
 
     return profile;
@@ -347,11 +364,12 @@ export class KycService {
       timestamp: new Date(),
     });
 
-    // Update user record
+    // Update user record — activate only after admin APPROVED KYC
     const user = defaultAuthService.getUserById(params.targetUserId);
     if (user) {
       user.kycStatus = params.decision;
       user.updatedAt = new Date();
+      defaultAuthService.syncCustomerActivationFromKyc(params.targetUserId);
     }
 
     // Log to durable audit trail
@@ -441,11 +459,18 @@ export class KycService {
   }
 
   /**
-   * Sanitizes profile for customer consumption (stripping internal reviewer notes).
+   * Sanitizes profile for customer consumption (stripping internal reviewer notes,
+   * full tax ID, and document preview payloads).
    */
-  public sanitizeForCustomer(profile: KycProfileRecord): Omit<KycProfileRecord, 'reviewerNotes'> {
-    const { reviewerNotes, ...safeProfile } = profile;
-    return safeProfile;
+  public sanitizeForCustomer(profile: KycProfileRecord): Omit<
+    KycProfileRecord,
+    'reviewerNotes' | 'taxIdFull'
+  > & { documentRefs: Omit<DocumentReference, 'previewDataUrl'>[] } {
+    const { reviewerNotes: _notes, taxIdFull: _tax, ...safeProfile } = profile;
+    return {
+      ...safeProfile,
+      documentRefs: (profile.documentRefs || []).map(({ previewDataUrl: _p, ...doc }) => doc),
+    };
   }
 
   public getAllProfilesForReview(reviewerRole: UserRole): KycProfileRecord[] {

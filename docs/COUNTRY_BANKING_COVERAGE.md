@@ -10,7 +10,7 @@ Registry version: `2026.03.1` (`CountryBankingRegistry.ts`).
 | GB (+ IM, JE, GG) | UK sort code / account / GB IBAN | sort code, account number, IBAN |
 | ES | Spanish CCC + IBAN | bank, branch, control digits, account, IBAN |
 | DE | German BLZ + IBAN | BLZ, account, IBAN |
-| BR | FEBRABAN-style | banco, agência, conta |
+| BR | FEBRABAN-style | banco, agência, conta, Pix key (unique) |
 
 ## Partially supported (IBAN length + Mod 97-10 only)
 
@@ -22,7 +22,9 @@ Remaining ISO 3166 signup countries (e.g. JP, CN without IBAN registry entry) ha
 
 ## KYC trigger
 
-On `APPROVED` in `KycService.reviewProfile`, `DomesticBankAccountService.ensurePrimaryAccountAfterKycApproval` runs idempotently. Signup country must match `verifiedCountryCode` from the KYC address.
+Domestic identifiers are generated only after KYC reaches `APPROVED` in `KycService.reviewProfile` (signup country must match KYC `verifiedCountryCode`).
+
+Optional prototype bypass: set `BYPASS_KYC_GATES=true` to auto-approve KYC and generate identifiers on register/login/Overview. Defaults to `false`.
 
 ## API
 

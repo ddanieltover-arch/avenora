@@ -12,10 +12,18 @@ import React, {
   useRef,
   ReactNode,
 } from 'react';
-import { buildPortalPath, navigateToPath } from '../routing/appRoutes.ts';
+import { buildAdminPath, buildPortalPath, navigateToPath } from '../routing/appRoutes.ts';
 
-function redirectToPortalDashboard(): void {
-  navigateToPath(buildPortalPath('overview'), { replace: true });
+const STAFF_ROLES = new Set(['SUPPORT', 'COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN']);
+
+/** Send the user to the customer dashboard (or admin overview for staff on /admin). */
+function redirectToDashboard(role?: AuthUser['role']): void {
+  const onAdminPath = window.location.pathname.startsWith('/admin');
+  const destination =
+    onAdminPath && role && STAFF_ROLES.has(role)
+      ? buildAdminPath('overview')
+      : buildPortalPath('overview');
+  navigateToPath(destination, { replace: true });
   window.dispatchEvent(new PopStateEvent('popstate'));
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -187,7 +195,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setToken(data.sessionToken);
       persistSessionToken(data.sessionToken);
       setAuthModalOpen(false);
-      redirectToPortalDashboard();
+      redirectToDashboard(data.user?.role);
       return { requiresMfa: false };
     } finally {
       setLoading(false);
@@ -244,13 +252,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setToken(data.sessionToken);
       persistSessionToken(data.sessionToken);
       setAuthModalOpen(false);
-      redirectToPortalDashboard();
+      redirectToDashboard(data.user?.role);
     } finally {
       setLoading(false);
     }
   };
 
-  const refreshUser = async () => {
+  const refreshUser = useCallback(async () => {
     if (!token) return;
     try {
       const res = await fetch('/api/v1/auth/me', {
@@ -263,7 +271,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.error('Failed to refresh user profile', err);
     }
-  };
+  }, [token]);
 
   const startMfa = async (): Promise<{ secret: string; otpauthUri: string }> => {
     if (!token) throw new Error('Not authenticated');

@@ -1,33 +1,21 @@
 /**
  * @license Apache-2.0
- * Avenora Fintech Platform — Payment Card Services & POS Simulator (Phase 03)
+ * Avenora Fintech Platform — Payment Card Services (Phase 03)
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from './AuthContext.tsx';
 import { useLocalization } from './LocalizationContext.tsx';
 import { useCustomerWalletScope } from '../hooks/useCustomerWalletScope.ts';
+import { resolveFixedCardSpendLimits } from '../domain/cards/cardSpendLimits.ts';
 import {
   CreditCard,
-  Lock,
-  Unlock,
   Sliders,
   PlusCircle,
-  ShoppingBag,
-  CheckCircle2,
-  AlertTriangle,
-  XCircle,
   Eye,
   EyeOff,
   Clock,
-  ArrowRight,
-  ShieldCheck,
   Wifi,
-  DollarSign,
-  Coffee,
-  Cloud,
-  Plane,
-  RotateCcw,
 } from 'lucide-react';
 import { AvenoraLogo } from './branding/AvenoraLogo.tsx';
 
@@ -52,7 +40,13 @@ interface PaymentCard {
   userId: string;
   type: 'DEBIT' | 'CREDIT';
   form: 'VIRTUAL' | 'PHYSICAL';
-  status: 'ACTIVE_SIMULATED' | 'FROZEN' | 'TERMINATED' | 'REQUESTED';
+  status:
+    | 'REQUESTED'
+    | 'PENDING_REVIEW'
+    | 'ACTIVE_SIMULATED'
+    | 'FROZEN'
+    | 'TERMINATED'
+    | 'ISSUANCE_DECLINED';
   currency: string;
   maskedPan: string;
   lastFour: string;
@@ -72,7 +66,8 @@ interface PaymentCard {
 export function CardManagementView() {
   const { user, token } = useAuth();
   const { t } = useLocalization();
-  const { primaryFiat, fiatCurrencyCodes, currencySelectLabel } = useCustomerWalletScope();
+  const { primaryFiat, fiatCurrencyCodes, currencySelectLabel, countryCode } =
+    useCustomerWalletScope();
 
   const [cards, setCards] = useState<PaymentCard[]>([]);
   const [selectedCard, setSelectedCard] = useState<PaymentCard | null>(null);
@@ -87,22 +82,24 @@ export function CardManagementView() {
   const [reqCurrency, setReqCurrency] = useState(primaryFiat);
   const [reqType, setReqType] = useState<'DEBIT' | 'CREDIT'>('DEBIT');
   const [reqForm, setReqForm] = useState<'VIRTUAL' | 'PHYSICAL'>('VIRTUAL');
-  const [reqDailyLimit, setReqDailyLimit] = useState('1000.00');
-  const [reqSingleLimit, setReqSingleLimit] = useState('500.00');
   const [issuingLoading, setIssuingLoading] = useState(false);
+
+  const fixedRequestLimits = useMemo(
+    () =>
+      resolveFixedCardSpendLimits({
+        currency: reqCurrency,
+        countryCode,
+      }),
+    [reqCurrency, countryCode]
+  );
+  const reqSingleLimit = fixedRequestLimits.singleTxLimitDecimal;
+  const reqDailyLimit = fixedRequestLimits.monthlyLimitDecimal;
 
   // Limits adjustment state
   const [isAdjustingLimits, setIsAdjustingLimits] = useState(false);
   const [editDailyLimit, setEditDailyLimit] = useState('');
   const [editSingleLimit, setEditSingleLimit] = useState('');
   const [savingLimits, setSavingLimits] = useState(false);
-
-  // POS Simulator State
-  const [posMerchant, setPosMerchant] = useState('Blue Bottle Coffee & Roasters');
-  const [posMcc, setPosMcc] = useState('5814');
-  const [posAmount, setPosAmount] = useState('6.75');
-  const [posAuthorizing, setPosAuthorizing] = useState(false);
-  const [posFeedback, setPosFeedback] = useState<{ type: 'success' | 'error'; message: string; details?: any } | null>(null);
 
   // Two-step hold resolution
   const [resolvingAuthId, setResolvingAuthId] = useState<string | null>(null);
@@ -119,7 +116,15 @@ export function CardManagementView() {
       if (res.ok && data.cards) {
         setCards(data.cards);
         if (data.cards.length > 0) {
-          const current = data.cards.find((c: PaymentCard) => c.id === selectedCard?.id) || data.cards[0];
+          const current =
+            data.cards.find((c: PaymentCard) => c.id === selectedCard?.id) ||
+            data.cards.find(
+              (c: PaymentCard) => c.status === 'ACTIVE_SIMULATED' || c.status === 'FROZEN'
+            ) ||
+            data.cards.find(
+              (c: PaymentCard) => c.status === 'PENDING_REVIEW' || c.status === 'REQUESTED'
+            ) ||
+            data.cards[0];
           setSelectedCard(current);
           setEditDailyLimit((Number(current.dailySpendLimitMinor) / 100).toFixed(2));
           setEditSingleLimit((Number(current.singleTxLimitMinor) / 100).toFixed(2));
@@ -139,32 +144,6 @@ export function CardManagementView() {
   useEffect(() => {
     setReqCurrency(primaryFiat);
   }, [primaryFiat]);
-
-  // Toggle Card Freeze
-  const handleToggleFreeze = async (card: PaymentCard) => {
-    if (!token) return;
-    const newStatus = card.status === 'FROZEN' ? 'ACTIVE_SIMULATED' : 'FROZEN';
-    const reason = newStatus === 'FROZEN' ? 'Customer requested card lock via dashboard' : 'Customer unlocked card';
-
-    try {
-      const res = await fetch(`/api/v1/cards/${card.id}/status`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ status: newStatus, reason }),
-      });
-      const data = await res.json();
-      if (res.ok && data.card) {
-        fetchCards();
-      } else {
-        alert(data.detail || 'Status update failed');
-      }
-    } catch (err) {
-      console.error(err);
-    }
-  };
 
   // Save Card Limits
   const handleSaveLimits = async (e: React.FormEvent) => {
@@ -219,9 +198,13 @@ export function CardManagementView() {
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.detail || data.title || 'Card issuance failed');
+        throw new Error(data.detail || data.title || 'Card request failed');
       }
       setIsRequestModalOpen(false);
+      alert(
+        data.message ||
+          'Your card request was submitted and is awaiting administrator approval before it is issued.'
+      );
       fetchCards();
     } catch (err: any) {
       alert(err.message);
@@ -230,50 +213,10 @@ export function CardManagementView() {
     }
   };
 
-  // Simulate POS Authorization
-  const handleSimulatePos = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!token || !selectedCard) return;
-
-    setPosAuthorizing(true);
-    setPosFeedback(null);
-
-    try {
-      const res = await fetch(`/api/v1/cards/${selectedCard.id}/simulate-auth`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          merchantName: posMerchant,
-          mcc: posMcc,
-          amountDecimal: posAmount,
-          currency: selectedCard.currency,
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || data.title || 'Authorization failed');
-      }
-
-      setPosFeedback({
-        type: 'success',
-        message: `Authorization APPROVED (${data.authorization.authCode}). Placed pre-auth hold of ${data.authorization.formattedAmount}.`,
-        details: data,
-      });
-
-      fetchCards();
-    } catch (err: any) {
-      setPosFeedback({
-        type: 'error',
-        message: `Authorization DECLINED: ${err.message}`,
-      });
-    } finally {
-      setPosAuthorizing(false);
-    }
-  };
+  const isCardIssued =
+    selectedCard?.status === 'ACTIVE_SIMULATED' || selectedCard?.status === 'FROZEN';
+  const isPendingIssuance =
+    selectedCard?.status === 'PENDING_REVIEW' || selectedCard?.status === 'REQUESTED';
 
   // Settle Hold
   const handleSettleAuth = async (authId: string) => {
@@ -317,34 +260,92 @@ export function CardManagementView() {
     }
   };
 
-  // Preset Merchant Selection
-  const applyPreset = (merchant: string, mcc: string, amount: string) => {
-    setPosMerchant(merchant);
-    setPosMcc(mcc);
-    setPosAmount(amount);
+  const selectCard = (card: PaymentCard) => {
+    setSelectedCard(card);
+    setShowFullPan(false);
+    setShowCvv(false);
+    setIsAdjustingLimits(false);
+    setEditDailyLimit((Number(card.dailySpendLimitMinor) / 100).toFixed(2));
+    setEditSingleLimit((Number(card.singleTxLimitMinor) / 100).toFixed(2));
+  };
+
+  const cardStatusShortLabel = (status: PaymentCard['status']) => {
+    if (status === 'ACTIVE_SIMULATED') return 'Active';
+    if (status === 'PENDING_REVIEW' || status === 'REQUESTED') return 'Pending';
+    if (status === 'ISSUANCE_DECLINED') return 'Declined';
+    if (status === 'FROZEN') return 'Frozen';
+    return status.replace(/_/g, ' ');
   };
 
   return (
     <div className="space-y-6">
-      {/* Main Grid: Card viewer and merchant authorizations */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column: Visual Card, Controls, Limits (7 cols) */}
-        <div className="lg:col-span-7 space-y-6">
+      <div className="space-y-6 max-w-3xl">
           {/* Card Selector / Top bar */}
-          <div className="flex justify-between items-center bg-slate-900 p-4 rounded-2xl border border-slate-800 text-xs">
+          <div className="flex justify-between items-center portal-dark-panel p-4 text-xs">
             <div className="flex items-center gap-2">
-              <CreditCard className="w-4 h-4 text-cyan-400" />
-              <span className="font-bold text-white">Active Cards ({cards.length})</span>
+              <CreditCard className="w-4 h-4 text-brand-accent" />
+              <span className="font-bold text-white">Your cards ({cards.length})</span>
             </div>
 
             <button
               onClick={() => setIsRequestModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold transition shadow-md shadow-cyan-950 text-xs"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-brand-primary hover:bg-brand-deep text-white font-bold transition shadow-md text-xs"
             >
               <PlusCircle className="w-3.5 h-3.5" />
-              <span>Issue New Card</span>
+              <span>Apply for card</span>
             </button>
           </div>
+
+          {cards.length > 1 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" role="listbox" aria-label="Select a card">
+              {cards.map((card) => {
+                const isSelected = selectedCard?.id === card.id;
+                const pending =
+                  card.status === 'PENDING_REVIEW' || card.status === 'REQUESTED';
+                return (
+                  <button
+                    key={card.id}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    onClick={() => selectCard(card)}
+                    className={`text-left rounded-xl border px-3 py-3 transition cursor-pointer ${
+                      isSelected
+                        ? 'border-brand-accent bg-brand-primary/20 ring-1 ring-brand-accent/40'
+                        : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-xs font-bold text-white tracking-wide">
+                        {card.status === 'ACTIVE_SIMULATED' || card.status === 'FROZEN'
+                          ? card.maskedPan
+                          : '•••• •••• •••• ••••'}
+                      </span>
+                      <span
+                        className={`shrink-0 px-1.5 py-0.5 rounded-full text-[9px] font-bold uppercase ${
+                          card.status === 'ACTIVE_SIMULATED'
+                            ? 'bg-emerald-500/20 text-emerald-300'
+                            : pending
+                              ? 'bg-amber-500/20 text-amber-300'
+                              : card.status === 'FROZEN'
+                                ? 'bg-amber-500/20 text-amber-200'
+                                : 'bg-slate-700 text-slate-300'
+                        }`}
+                      >
+                        {cardStatusShortLabel(card.status)}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-slate-400">
+                      <span>
+                        {card.type} · {card.form} · {card.currency}
+                      </span>
+                      <span className="font-mono">{card.lastFour !== '••••' ? `****${card.lastFour}` : 'Pending'}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           {/* Realistic Card Visual Component */}
           {selectedCard ? (
@@ -353,18 +354,22 @@ export function CardManagementView() {
                 className={`w-full max-w-md mx-auto aspect-[1.586/1] rounded-3xl p-6 sm:p-7 text-white flex flex-col justify-between shadow-2xl relative overflow-hidden transition-all duration-300 border ${
                   selectedCard.status === 'FROZEN'
                     ? 'bg-gradient-to-br from-slate-900 via-slate-800 to-amber-950/60 border-amber-500/40 opacity-90'
-                    : 'bg-gradient-to-br from-slate-900 via-cyan-950/60 to-slate-950 border-cyan-500/30'
+                    : isPendingIssuance
+                    ? 'bg-gradient-to-br from-slate-900 via-slate-800 to-slate-950 border-amber-500/30 opacity-95'
+                    : selectedCard.status === 'ISSUANCE_DECLINED'
+                    ? 'bg-gradient-to-br from-slate-900 via-slate-800 to-rose-950/40 border-rose-500/30 opacity-90'
+                    : 'bg-gradient-to-br from-slate-900 via-brand-deep to-slate-950 border-brand-primary/40'
                 }`}
               >
                 {/* Decorative Holographic Elements */}
-                <div className="absolute -top-12 -right-12 w-48 h-48 bg-cyan-500/10 rounded-full blur-2xl pointer-events-none" />
-                <div className="absolute -bottom-12 -left-12 w-48 h-48 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
+                <div className="absolute -top-12 -right-12 w-48 h-48 bg-brand-accent/10 rounded-full blur-2xl pointer-events-none" />
+                <div className="absolute -bottom-12 -left-12 w-48 h-48 bg-brand-primary/10 rounded-full blur-2xl pointer-events-none" />
 
                 {/* Top Row: Brand, Chip, Contactless, Form */}
                 <div className="flex justify-between items-start z-10">
                   <div className="space-y-1">
                     <AvenoraLogo size="xs" className="rounded bg-white/90 p-0.5" />
-                    <span className="text-[9px] uppercase tracking-wider block font-bold text-cyan-400">
+                    <span className="text-[9px] uppercase tracking-wider block font-bold text-brand-accent">
                       {selectedCard.type} • {selectedCard.form}
                     </span>
                   </div>
@@ -375,10 +380,20 @@ export function CardManagementView() {
                       className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                         selectedCard.status === 'ACTIVE_SIMULATED'
                           ? 'bg-brand-accent-light0/20 text-emerald-400 border border-emerald-500/40'
+                          : isPendingIssuance
+                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                          : selectedCard.status === 'ISSUANCE_DECLINED'
+                          ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
                           : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                       }`}
                     >
-                      {selectedCard.status === 'ACTIVE_SIMULATED' ? 'ACTIVE' : selectedCard.status}
+                      {selectedCard.status === 'ACTIVE_SIMULATED'
+                        ? 'ACTIVE'
+                        : isPendingIssuance
+                          ? 'PENDING APPROVAL'
+                          : selectedCard.status === 'ISSUANCE_DECLINED'
+                            ? 'DECLINED'
+                            : selectedCard.status}
                     </span>
                   </div>
                 </div>
@@ -396,15 +411,21 @@ export function CardManagementView() {
                 <div className="z-10 space-y-3">
                   <div className="flex justify-between items-center">
                     <span className="font-mono text-lg sm:text-xl font-bold tracking-widest text-slate-100">
-                      {showFullPan ? selectedCard.syntheticPanFormatted : selectedCard.maskedPan}
+                      {isCardIssued
+                        ? showFullPan
+                          ? selectedCard.syntheticPanFormatted
+                          : selectedCard.maskedPan
+                        : '•••• •••• •••• ••••'}
                     </span>
-                    <button
-                      onClick={() => setShowFullPan(!showFullPan)}
-                      className="p-1 rounded-lg text-slate-400 hover:text-white transition"
-                      title={showFullPan ? 'Mask PAN' : 'Reveal full PAN'}
-                    >
-                      {showFullPan ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
+                    {isCardIssued && (
+                      <button
+                        onClick={() => setShowFullPan(!showFullPan)}
+                        className="p-1 rounded-lg text-slate-400 hover:text-white transition"
+                        title={showFullPan ? 'Mask PAN' : 'Reveal full PAN'}
+                      >
+                        {showFullPan ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    )}
                   </div>
 
                   {/* Cardholder, Expiry, CVV */}
@@ -416,60 +437,59 @@ export function CardManagementView() {
 
                     <div>
                       <span className="text-[8px] text-slate-400 block tracking-wider">Expires</span>
-                      <span className="font-bold text-white tracking-wider">{selectedCard.syntheticExpiry}</span>
+                      <span className="font-bold text-white tracking-wider">
+                        {isCardIssued ? selectedCard.syntheticExpiry : '••/••'}
+                      </span>
                     </div>
 
                     <div className="flex items-center gap-1.5">
                       <div>
                         <span className="text-[8px] text-slate-400 block tracking-wider">CVV (Demo)</span>
                         <span className="font-bold text-white tracking-wider">
-                          {showCvv ? selectedCard.syntheticCvv : '•••'}
+                          {isCardIssued && showCvv ? selectedCard.syntheticCvv : '•••'}
                         </span>
                       </div>
-                      <button
-                        onClick={() => setShowCvv(!showCvv)}
-                        className="text-slate-400 hover:text-white p-0.5"
-                      >
-                        {showCvv ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                      </button>
+                      {isCardIssued && (
+                        <button
+                          onClick={() => setShowCvv(!showCvv)}
+                          className="text-slate-400 hover:text-white p-0.5"
+                        >
+                          {showCvv ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
               </div>
+              {isPendingIssuance && (
+                <p className="mt-3 text-center text-[11px] text-amber-200/90 max-w-md mx-auto">
+                  This card request is awaiting administrator approval. Card details become available after issuance.
+                </p>
+              )}
+              {selectedCard.status === 'ISSUANCE_DECLINED' && (
+                <p className="mt-3 text-center text-[11px] text-rose-300/90 max-w-md mx-auto">
+                  This card request was declined. You may submit a new request if eligible.
+                </p>
+              )}
             </div>
           ) : (
-            <div className="text-center py-20 text-slate-500 text-xs">No active card available.</div>
+            <div className="text-center py-20 text-slate-500 text-xs">No cards yet. Request a new card to get started.</div>
           )}
 
-          {/* Quick Controls: Freeze & Spending Limits */}
-          {selectedCard && (
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-5 text-xs">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-4">
-                <div>
-                  <span className="font-bold text-white block">Card State & Safeguards</span>
-                  <span className="text-[11px] text-slate-400">Instantly lock or unlock card authorization processing</span>
-                </div>
-
-                <button
-                  onClick={() => handleToggleFreeze(selectedCard)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold transition text-xs shadow-md ${
-                    selectedCard.status === 'FROZEN'
-                      ? 'bg-emerald-600 hover:bg-brand-accent-light0 text-white shadow-emerald-950'
-                      : 'bg-amber-600 hover:bg-amber-500 text-white shadow-amber-950'
-                  }`}
-                >
-                  {selectedCard.status === 'FROZEN' ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
-                  <span>{selectedCard.status === 'FROZEN' ? 'Unfreeze Card' : 'Freeze Card'}</span>
-                </button>
+          {/* Spending limits — only for issued cards */}
+          {selectedCard && isCardIssued && (
+            <div className="portal-dark-panel p-5 space-y-5 text-xs">
+              <div className="border-b border-slate-800 pb-4">
+                <span className="font-bold text-white block">Card safeguards</span>
+                <span className="text-[11px] text-slate-400">Set single-transaction and monthly spend limits</span>
               </div>
 
-              {/* Spend Limits Display & Adjuster */}
               <div className="space-y-3">
                 <div className="flex justify-between items-center">
-                  <span className="font-bold text-slate-300">Transaction & Daily Limits</span>
+                  <span className="font-bold text-slate-300">Transaction & Monthly Limits</span>
                   <button
                     onClick={() => setIsAdjustingLimits(!isAdjustingLimits)}
-                    className="text-cyan-400 hover:text-cyan-300 font-semibold flex items-center gap-1"
+                    className="text-brand-accent hover:text-brand-accent font-semibold flex items-center gap-1"
                   >
                     <Sliders className="w-3.5 h-3.5" />
                     <span>{isAdjustingLimits ? 'Cancel' : 'Adjust Limits'}</span>
@@ -486,12 +506,12 @@ export function CardManagementView() {
                     </div>
 
                     <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-                      <span className="text-[10px] text-slate-400 block">Daily Spend Limit</span>
-                      <span className="text-sm font-bold font-mono text-cyan-300 mt-1 block">
+                      <span className="text-[10px] text-slate-400 block">Monthly Spend Limit</span>
+                      <span className="text-sm font-bold font-mono text-brand-accent mt-1 block">
                         {selectedCard.formattedDailyLimit}
                       </span>
                       <span className="text-[10px] text-slate-500 mt-0.5 block">
-                        Spent today: ${(Number(selectedCard.dailySpentMinor) / 100).toFixed(2)}
+                        Spent this month: ${(Number(selectedCard.dailySpentMinor) / 100).toFixed(2)}
                       </span>
                     </div>
                   </div>
@@ -508,7 +528,7 @@ export function CardManagementView() {
                         />
                       </div>
                       <div>
-                        <label className="text-[10px] text-slate-400 block mb-1">Daily Limit ({selectedCard.currency})</label>
+                        <label className="text-[10px] text-slate-400 block mb-1">Monthly Limit ({selectedCard.currency})</label>
                         <input
                           type="text"
                           value={editDailyLimit}
@@ -520,7 +540,7 @@ export function CardManagementView() {
                     <button
                       type="submit"
                       disabled={savingLimits}
-                      className="px-4 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-bold transition text-[11px]"
+                      className="px-4 py-1.5 rounded-lg bg-brand-primary hover:bg-brand-deep text-white font-bold transition text-[11px]"
                     >
                       {savingLimits ? 'Saving...' : 'Save New Limits'}
                     </button>
@@ -529,150 +549,15 @@ export function CardManagementView() {
               </div>
             </div>
           )}
-        </div>
-
-        {/* Right Column: POS Terminal Simulator (5 cols) */}
-        <div className="lg:col-span-5 space-y-6">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-5 text-xs">
-            <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
-              <ShoppingBag className="w-5 h-5 text-cyan-400" />
-              <div>
-                <h3 className="font-bold text-white text-sm">Point-of-sale authorizations</h3>
-                <span className="text-[11px] text-slate-400">Authorize merchant purchases and view pending holds</span>
-              </div>
-            </div>
-
-            {/* Merchant Presets */}
-            <div className="space-y-2">
-              <span className="text-slate-400 font-semibold block text-[11px]">Quick Merchant Presets</span>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => applyPreset('Blue Bottle Coffee & Roasters', '5814', '6.75')}
-                  className="p-2 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-700 text-left transition"
-                >
-                  <Coffee className="w-3.5 h-3.5 text-amber-400 mb-1" />
-                  <span className="font-bold text-slate-200 block text-[11px]">Coffee Shop</span>
-                  <span className="text-[10px] text-slate-500">$6.75 • MCC 5814</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => applyPreset('Amazon AWS Cloud Services', '5734', '125.00')}
-                  className="p-2 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-700 text-left transition"
-                >
-                  <Cloud className="w-3.5 h-3.5 text-cyan-400 mb-1" />
-                  <span className="font-bold text-slate-200 block text-[11px]">AWS Cloud</span>
-                  <span className="text-[10px] text-slate-500">$125.00 • MCC 5734</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => applyPreset('Delta Air Lines SkyClub', '4511', '350.00')}
-                  className="p-2 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-700 text-left transition"
-                >
-                  <Plane className="w-3.5 h-3.5 text-indigo-400 mb-1" />
-                  <span className="font-bold text-slate-200 block text-[11px]">Delta Airlines</span>
-                  <span className="text-[10px] text-slate-500">$350.00 • MCC 4511</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => applyPreset('Whole Foods Market', '5411', '84.20')}
-                  className="p-2 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-700 text-left transition"
-                >
-                  <ShoppingBag className="w-3.5 h-3.5 text-emerald-400 mb-1" />
-                  <span className="font-bold text-slate-200 block text-[11px]">Whole Foods</span>
-                  <span className="text-[10px] text-slate-500">$84.20 • MCC 5411</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Custom POS Form */}
-            <form onSubmit={handleSimulatePos} className="space-y-4">
-              <div>
-                <label className="text-slate-300 font-medium block mb-1">Merchant Name</label>
-                <input
-                  type="text"
-                  required
-                  value={posMerchant}
-                  onChange={(e) => setPosMerchant(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-slate-300 font-medium block mb-1">MCC Code (4 digits)</label>
-                  <input
-                    type="text"
-                    required
-                    maxLength={4}
-                    value={posMcc}
-                    onChange={(e) => setPosMcc(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-slate-300 font-medium block mb-1">
-                    Amount ({selectedCard?.currency || primaryFiat})
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={posAmount}
-                    onChange={(e) => setPosAmount(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono"
-                  />
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={posAuthorizing || !selectedCard}
-                className="w-full py-3 rounded-xl bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 text-white font-bold transition flex items-center justify-center gap-2 shadow-lg shadow-cyan-950 disabled:opacity-50"
-              >
-                <CreditCard className="w-4 h-4" />
-                <span>{posAuthorizing ? 'Authorizing with network...' : 'Authorize purchase'}</span>
-              </button>
-            </form>
-
-            {/* Feedback notification */}
-            {posFeedback && (
-              <div
-                className={`p-4 rounded-xl border text-xs flex items-start gap-3 ${
-                  posFeedback.type === 'success'
-                    ? 'bg-brand-accent-light0/10 border-emerald-500/30 text-emerald-300'
-                    : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
-                }`}
-              >
-                {posFeedback.type === 'success' ? (
-                  <CheckCircle2 className="w-5 h-5 shrink-0 text-emerald-400" />
-                ) : (
-                  <XCircle className="w-5 h-5 shrink-0 text-rose-400" />
-                )}
-                <div>
-                  <span className="font-bold block">{posFeedback.message}</span>
-                  {posFeedback.details?.ledgerJournalEntryId && (
-                    <span className="text-[10px] text-emerald-400/80 font-mono block mt-1">
-                      Double-Entry Journal Entry: {posFeedback.details.ledgerJournalEntryId}
-                    </span>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
       </div>
 
       {/* Two-Step Bank Pre-Authorization Holds & Settlements Inspector */}
-      {selectedCard && (
-        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-4 shadow-xl">
+      {selectedCard && isCardIssued && (
+        <div className="portal-dark-panel p-6 space-y-4 shadow-xl">
           <div className="flex justify-between items-center border-b border-slate-800 pb-3">
             <div>
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                <Clock className="w-4 h-4 text-cyan-400" />
+                <Clock className="w-4 h-4 text-brand-accent" />
                 Authorization Holds & Settlement Lifecycle
               </h3>
               <span className="text-[11px] text-slate-400">
@@ -706,7 +591,7 @@ export function CardManagementView() {
                 ) : (
                   selectedCard.authorizations.map((auth) => (
                     <tr key={auth.id} className="hover:bg-slate-800/40">
-                      <td className="py-3 px-4 font-bold text-cyan-400">{auth.authCode}</td>
+                      <td className="py-3 px-4 font-bold text-brand-accent">{auth.authCode}</td>
                       <td className="py-3 px-4 font-sans text-white font-medium">{auth.merchantName}</td>
                       <td className="py-3 px-4 text-slate-400">{auth.mcc}</td>
                       <td className="py-3 px-4 font-bold text-slate-200">{auth.formattedAmount}</td>
@@ -759,7 +644,7 @@ export function CardManagementView() {
       {/* ISSUE NEW CARD MODAL */}
       {isRequestModalOpen && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex modal-overlay-scroll justify-center p-4">
-          <div className="modal-panel-scroll bg-slate-900 border border-slate-800 rounded-3xl max-w-md p-6 space-y-5 shadow-2xl my-auto sm:my-0">
+          <div className="modal-panel-scroll portal-dark-panel max-w-md p-6 space-y-5 shadow-2xl my-auto sm:my-0">
             <div className="flex justify-between items-center">
               <h3 className="font-bold text-white text-base">Request payment card</h3>
               <button
@@ -807,7 +692,7 @@ export function CardManagementView() {
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white"
                   >
                     <option value="VIRTUAL">Virtual</option>
-                    <option value="PHYSICAL">Physical (Demo)</option>
+                    <option value="PHYSICAL">Physical</option>
                   </select>
                 </div>
               </div>
@@ -817,24 +702,27 @@ export function CardManagementView() {
                   <label className="text-slate-300 font-medium block mb-1">Single Tx Limit</label>
                   <input
                     type="text"
-                    required
+                    readOnly
                     value={reqSingleLimit}
-                    onChange={(e) => setReqSingleLimit(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono opacity-90 cursor-not-allowed"
                   />
                 </div>
 
                 <div>
-                  <label className="text-slate-300 font-medium block mb-1">Daily Limit</label>
+                  <label className="text-slate-300 font-medium block mb-1">Monthly Limit</label>
                   <input
                     type="text"
-                    required
+                    readOnly
                     value={reqDailyLimit}
-                    onChange={(e) => setReqDailyLimit(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono opacity-90 cursor-not-allowed"
                   />
                 </div>
               </div>
+              <p className="text-[10px] text-slate-500">
+                {countryCode === 'BR' || reqCurrency.toUpperCase() === 'BRL'
+                  ? 'Brazil accounts: fixed single 1,000 / monthly 10,000 (local).'
+                  : 'Fixed policy: single ≈ 20 USD and monthly ≈ 2,000 USD, converted to your local currency and rounded up to the nearest 10 / 100 / 1,000 / 10,000.'}
+              </p>
 
               <div className="flex justify-end gap-3 pt-3">
                 <button
@@ -847,9 +735,9 @@ export function CardManagementView() {
                 <button
                   type="submit"
                   disabled={issuingLoading}
-                  className="px-5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold transition shadow-md shadow-cyan-950 disabled:opacity-50"
+                  className="px-5 py-2 rounded-xl bg-brand-primary hover:bg-brand-deep text-white font-bold transition shadow-md disabled:opacity-50"
                 >
-                  {issuingLoading ? 'Provisioning...' : 'Issue card'}
+                  {issuingLoading ? 'Submitting...' : 'Submit for approval'}
                 </button>
               </div>
             </form>
