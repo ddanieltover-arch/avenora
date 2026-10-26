@@ -8,6 +8,7 @@ dist/
 build/
 .next/
 out/
+api/index.js
 
 # Environment and secrets (CRITICAL: Never commit credentials)
 .env
