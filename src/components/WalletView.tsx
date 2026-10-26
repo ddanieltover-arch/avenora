@@ -33,6 +33,7 @@ import {
   Copy,
   UploadCloud,
 } from 'lucide-react';
+import { TransactionPinConfirmModal } from './auth/TransactionPinConfirmModal.tsx';
 
 type WalletModalId = 'deposit' | 'withdraw' | 'convert';
 
@@ -128,6 +129,9 @@ export const WalletView: React.FC<WalletViewProps> = ({
   const [opWithdrawRail, setOpWithdrawRail] = useState('');
   const [withdrawBankingDetails, setWithdrawBankingDetails] = useState<Record<string, string>>({});
   const [btcWithdrawAddress, setBtcWithdrawAddress] = useState('');
+  const [withdrawPinConfirmOpen, setWithdrawPinConfirmOpen] = useState(false);
+  const [withdrawPinSubmitting, setWithdrawPinSubmitting] = useState(false);
+  const [withdrawPinError, setWithdrawPinError] = useState<string | null>(null);
 
   const isBtcDeposit = opCurrency === 'BTC';
   const isBtcWithdraw = opCurrency === 'BTC';
@@ -460,13 +464,22 @@ export const WalletView: React.FC<WalletViewProps> = ({
     }
   };
 
-  const handleWithdrawal = async (e: React.FormEvent) => {
+  const openWithdrawPinConfirm = (e: React.FormEvent) => {
     e.preventDefault();
+    setFeedback(null);
+    setWithdrawPinError(null);
+    setWithdrawPinConfirmOpen(true);
+  };
+
+  const executeWithdrawalWithPin = async (transactionPin: string) => {
+    setWithdrawPinSubmitting(true);
+    setWithdrawPinError(null);
     setFeedback(null);
     try {
       const body: Record<string, unknown> = {
         currency: opCurrency,
         amountDecimal: opAmount,
+        transactionPin,
       };
       if (isBtcWithdraw) {
         body.btcAddress = btcWithdrawAddress.trim();
@@ -486,6 +499,7 @@ export const WalletView: React.FC<WalletViewProps> = ({
       });
       const data = await res.json();
       if (res.ok) {
+        setWithdrawPinConfirmOpen(false);
         setFeedback({
           success: true,
           title: 'Withdrawal submitted',
@@ -499,7 +513,10 @@ export const WalletView: React.FC<WalletViewProps> = ({
         setActiveModal(null);
         setBtcWithdrawAddress('');
         setWithdrawBankingDetails({});
+      } else if (res.status === 401 || data.type?.includes('transaction-pin')) {
+        setWithdrawPinError(data.detail || data.title || 'Invalid transaction PIN.');
       } else {
+        setWithdrawPinConfirmOpen(false);
         setFeedback({
           success: false,
           title: data.title || 'Withdrawal Failed',
@@ -509,7 +526,10 @@ export const WalletView: React.FC<WalletViewProps> = ({
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Network error';
+      setWithdrawPinConfirmOpen(false);
       setFeedback({ success: false, title: 'Network Error', message });
+    } finally {
+      setWithdrawPinSubmitting(false);
     }
   };
 
@@ -1039,7 +1059,7 @@ export const WalletView: React.FC<WalletViewProps> = ({
             </button>
           </div>
 
-          <form onSubmit={handleWithdrawal} className="space-y-4 text-xs">
+          <form onSubmit={openWithdrawPinConfirm} className="space-y-4 text-xs">
             <div className="p-3 rounded-lg bg-brand-deep/40 border border-brand-primary/35 text-brand-accent-light text-[11px]">
               Funds are reserved from your available balance and shown under Hold until operations approves the payout.
               Rejected requests return the amount to available balance.
@@ -1151,12 +1171,28 @@ export const WalletView: React.FC<WalletViewProps> = ({
                 type="submit"
                 className="px-4 py-1.5 rounded-lg bg-brand-primary hover:bg-brand-deep text-white font-medium shadow"
               >
-                Confirm withdrawal
+                Continue to PIN
               </button>
             </div>
           </form>
           </div>
         </WalletModalOverlay>
+      )}
+
+      {withdrawPinConfirmOpen && (
+        <TransactionPinConfirmModal
+          title="Authorize withdrawal"
+          description="Enter your 4-digit transaction PIN to submit this withdrawal."
+          confirmLabel="Confirm withdrawal"
+          submitting={withdrawPinSubmitting}
+          errorMessage={withdrawPinError}
+          onConfirm={executeWithdrawalWithPin}
+          onCancel={() => {
+            if (withdrawPinSubmitting) return;
+            setWithdrawPinConfirmOpen(false);
+            setWithdrawPinError(null);
+          }}
+        />
       )}
 
       {/* MODAL 3: FX Currency Exchange */}

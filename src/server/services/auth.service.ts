@@ -56,6 +56,8 @@ export interface SessionRecord {
   ipAddress?: string;
   userAgent?: string;
   isRevoked: boolean;
+  /** True after post-login PIN unlock (or immediately after registration). */
+  transactionPinUnlocked: boolean;
   expiresAt: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -74,6 +76,7 @@ export interface AuthSuccessResult {
   user: Omit<UserRecord, 'passwordHash' | 'transactionPinHash' | 'mfaSecret' | 'mfaRecoveryCodes'>;
   sessionToken: string;
   expiresAt: Date;
+  transactionPinUnlocked: boolean;
 }
 
 export class AuthService {
@@ -263,8 +266,10 @@ export class AuthService {
       .sendWelcomeEmail({ to: user.email, fullName: user.fullName })
       .catch((err) => console.error('[auth] welcome email failed:', err));
 
-    // Create session
-    return this.createSession(user, params.ipAddress, params.userAgent);
+    // Create session — unlock PIN immediately; user just set it during registration
+    return this.createSession(user, params.ipAddress, params.userAgent, {
+      transactionPinUnlocked: true,
+    });
   }
 
   /**
@@ -673,10 +678,106 @@ export class AuthService {
     return safeUser;
   }
 
-  private async createSession(user: UserRecord, ipAddress?: string, userAgent?: string): Promise<AuthSuccessResult> {
+  /** Returns whether the current session has completed post-login PIN unlock. */
+  public isTransactionPinUnlocked(sessionToken: string): boolean {
+    if (!sessionToken) return false;
+    const tokenHash = SecurityService.hashToken(sessionToken);
+    const session = this.sessionsByTokenHash.get(tokenHash);
+    if (!session || session.isRevoked || session.expiresAt < new Date()) return false;
+    return session.transactionPinUnlocked === true;
+  }
+
+  /**
+   * Verifies the 4-digit transaction PIN for the session user and unlocks the session.
+   * Uses the same lockout counters as password login.
+   */
+  public async unlockSessionWithTransactionPin(
+    sessionToken: string,
+    transactionPin: string,
+  ): Promise<{ transactionPinUnlocked: true }> {
+    await this.readyPromise;
+
+    if (!/^\d{4}$/.test(transactionPin)) {
+      throw new Error('Transaction PIN must be exactly 4 digits.');
+    }
+
+    const tokenHash = SecurityService.hashToken(sessionToken);
+    const session = this.sessionsByTokenHash.get(tokenHash);
+    if (!session || session.isRevoked || session.expiresAt < new Date()) {
+      throw new Error('Invalid or expired session.');
+    }
+
+    const user = this.usersById.get(session.userId);
+    if (!user) {
+      throw new Error('Invalid or expired session.');
+    }
+
+    await this.assertTransactionPinForUser(user, transactionPin);
+
+    session.transactionPinUnlocked = true;
+    session.updatedAt = new Date();
+    return { transactionPinUnlocked: true };
+  }
+
+  /**
+   * Verifies a transaction PIN for a money-moving operation (does not unlock the session).
+   */
+  public async verifyTransactionPinForUser(userId: string, transactionPin: string): Promise<void> {
+    await this.readyPromise;
+
+    if (!/^\d{4}$/.test(transactionPin)) {
+      throw new Error('Transaction PIN must be exactly 4 digits.');
+    }
+
+    const user = this.usersById.get(userId);
+    if (!user) {
+      throw new Error('Invalid transaction PIN.');
+    }
+
+    await this.assertTransactionPinForUser(user, transactionPin);
+  }
+
+  private async assertTransactionPinForUser(user: UserRecord, transactionPin: string): Promise<void> {
+    if (user.lockedUntil && user.lockedUntil > new Date()) {
+      const waitMinutes = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60000);
+      throw new Error(
+        `Account temporarily locked due to excessive failed attempts. Please try again in ${waitMinutes} minutes.`,
+      );
+    }
+
+    const isValid = await SecurityService.verifyPassword(transactionPin, user.transactionPinHash);
+    if (!isValid) {
+      user.failedLoginAttempts += 1;
+      user.updatedAt = new Date();
+      if (user.failedLoginAttempts >= this.MAX_FAILED_ATTEMPTS) {
+        user.lockedUntil = new Date(Date.now() + this.LOCKOUT_DURATION_MS);
+        voidEmail(
+          'login-lockout',
+          defaultEmailService.sendLoginLockoutEmail({
+            to: user.email,
+            fullName: user.fullName,
+            lockMinutes: Math.ceil(this.LOCKOUT_DURATION_MS / 60000),
+          }),
+        );
+      }
+      throw new Error('Invalid transaction PIN.');
+    }
+
+    user.failedLoginAttempts = 0;
+    user.lockedUntil = undefined;
+    user.updatedAt = new Date();
+  }
+
+  private async createSession(
+    user: UserRecord,
+    ipAddress?: string,
+    userAgent?: string,
+    options?: { transactionPinUnlocked?: boolean },
+  ): Promise<AuthSuccessResult> {
     const rawSessionToken = SecurityService.generateSecureToken(32);
     const tokenHash = SecurityService.hashToken(rawSessionToken);
     const expiresAt = new Date(Date.now() + this.SESSION_TTL_MS);
+    const transactionPinUnlocked = options?.transactionPinUnlocked === true;
 
     const session: SessionRecord = {
       id: `ses_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
@@ -685,6 +786,7 @@ export class AuthService {
       ipAddress,
       userAgent,
       isRevoked: false,
+      transactionPinUnlocked,
       expiresAt,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -696,6 +798,7 @@ export class AuthService {
       user: this.sanitizeUser(user),
       sessionToken: rawSessionToken,
       expiresAt,
+      transactionPinUnlocked,
     };
   }
 

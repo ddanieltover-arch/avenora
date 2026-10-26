@@ -61,6 +61,56 @@ describe('Auth HTTP API Endpoints (/api/v1/auth)', () => {
     expect(data.status).toBe('authenticated');
     expect(data.user.email).toBe(registeredEmail);
     expect(data.sessionToken).toBeDefined();
+    expect(data.transactionPinUnlocked).toBe(false);
+  });
+
+  it('requires and verifies transaction PIN to unlock the session', async () => {
+    const loginRes = await fetch(`${baseUrl}/api/v1/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: registeredEmail,
+        password: TEST_PASSWORD,
+      }),
+    });
+    const loginData = await loginRes.json();
+    expect(loginRes.status).toBe(200);
+    const token = loginData.sessionToken as string;
+
+    const meLocked = await fetch(`${baseUrl}/api/v1/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const meLockedData = await meLocked.json();
+    expect(meLocked.status).toBe(200);
+    expect(meLockedData.transactionPinUnlocked).toBe(false);
+
+    const badPin = await fetch(`${baseUrl}/api/v1/auth/verify-transaction-pin`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ transactionPin: '0000' }),
+    });
+    expect(badPin.status).toBe(401);
+
+    const goodPin = await fetch(`${baseUrl}/api/v1/auth/verify-transaction-pin`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ transactionPin: '1234' }),
+    });
+    const goodData = await goodPin.json();
+    expect(goodPin.status).toBe(200);
+    expect(goodData.transactionPinUnlocked).toBe(true);
+
+    const meUnlocked = await fetch(`${baseUrl}/api/v1/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const meUnlockedData = await meUnlocked.json();
+    expect(meUnlockedData.transactionPinUnlocked).toBe(true);
   });
 
   it('returns 401 Unauthorized (NOT 500) for incorrect password', async () => {

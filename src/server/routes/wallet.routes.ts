@@ -6,12 +6,17 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { defaultWalletService } from '../services/wallet.service.ts';
+import { defaultAuthService } from '../services/auth.service.ts';
 import { authenticate } from '../middleware/auth.ts';
 import { requireTransactionEligible } from '../middleware/accountAccess.ts';
 import { isDepositRailAllowedForCountry } from '../../domain/country/countryDepositRails.ts';
 import { isWithdrawalRailAllowedForCountry } from '../../domain/country/withdrawalRailFields.ts';
 
 export const walletRouter = Router();
+
+const TransactionPinSchema = z
+  .string()
+  .regex(/^\d{4}$/, 'Transaction PIN must be exactly 4 digits');
 
 const DepositSchema = z.object({
   currency: z.string().length(3),
@@ -30,8 +35,9 @@ const WithdrawalSchema = z.object({
   currency: z.string().min(3).max(4),
   amountDecimal: z.string().regex(/^\d+(\.\d+)?$/, 'Amount must be a valid positive decimal'),
   destinationRail: z.string().min(2).optional(),
-  bankingDetails: z.record(z.string()).optional(),
+  bankingDetails: z.record(z.string(), z.string()).optional(),
   btcAddress: z.string().min(14).max(90).optional(),
+  transactionPin: TransactionPinSchema,
 });
 
 const TransferSchema = z.object({
@@ -39,7 +45,43 @@ const TransferSchema = z.object({
   currency: z.string().length(3),
   amountDecimal: z.string().regex(/^\d+(\.\d+)?$/, 'Amount must be a valid positive decimal'),
   note: z.string().optional(),
+  transactionPin: TransactionPinSchema,
 });
+
+async function requireValidTransactionPin(
+  req: Request,
+  res: Response,
+  transactionPin: string,
+): Promise<boolean> {
+  try {
+    await defaultAuthService.verifyTransactionPinForUser(req.user!.id, transactionPin);
+    return true;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes('temporarily locked')) {
+      res.status(429).json({
+        type: 'https://avenora.com/errors/account-locked',
+        title: 'Account Temporarily Locked',
+        status: 429,
+        detail: message,
+        instance: req.originalUrl,
+        timestamp: new Date().toISOString(),
+      });
+      return false;
+    }
+    res.status(401).json({
+      type: 'https://avenora.com/errors/invalid-transaction-pin',
+      title: 'Invalid Transaction PIN',
+      status: 401,
+      detail: message.includes('must be exactly 4 digits')
+        ? message
+        : 'The transaction PIN is incorrect.',
+      instance: req.originalUrl,
+      timestamp: new Date().toISOString(),
+    });
+    return false;
+  }
+}
 
 const FxQuoteSchema = z.object({
   sourceCurrency: z.string().min(3).max(4),
@@ -220,6 +262,9 @@ walletRouter.post('/deposit', authenticate, requireTransactionEligible, async (r
 walletRouter.post('/withdraw', authenticate, requireTransactionEligible, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const validated = WithdrawalSchema.parse(req.body);
+    const pinOk = await requireValidTransactionPin(req, res, validated.transactionPin);
+    if (!pinOk) return;
+
     const currency = validated.currency.toUpperCase();
     const isBtc = currency === 'BTC';
 
@@ -276,6 +321,9 @@ walletRouter.post('/withdraw', authenticate, requireTransactionEligible, async (
 walletRouter.post('/transfer', authenticate, requireTransactionEligible, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const validated = TransferSchema.parse(req.body);
+    const pinOk = await requireValidTransactionPin(req, res, validated.transactionPin);
+    if (!pinOk) return;
+
     const idempotencyKey = (req.headers['idempotency-key'] as string) || undefined;
 
     const result = await defaultWalletService.executeInternalTransfer({

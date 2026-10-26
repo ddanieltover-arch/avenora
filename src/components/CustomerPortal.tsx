@@ -35,6 +35,7 @@ import { DashboardOverview } from './portal/DashboardOverview.tsx';
 import { AccountSuspendedBanner } from './portal/AccountSuspendedBanner.tsx';
 import { AccountPendingVerificationBanner } from './portal/AccountPendingVerificationBanner.tsx';
 import { AccountLockedModal } from './portal/AccountLockedModal.tsx';
+import { TransactionPinUnlockModal } from './portal/TransactionPinUnlockModal.tsx';
 import { PortalBottomNav } from './portal/mobile/PortalBottomNav.tsx';
 import { PortalMobileHeader } from './portal/mobile/PortalMobileHeader.tsx';
 import { DashboardMobileHome } from './portal/mobile/DashboardMobileHome.tsx';
@@ -49,7 +50,7 @@ interface CustomerPortalProps {
 
 export const CustomerPortal: React.FC<CustomerPortalProps> = ({ activeTab, onTabChange, onOpenAdmin }) => {
   const { t } = useLocalization();
-  const { user, token, logout, refreshUser } = useAuth();
+  const { user, token, logout, refreshUser, transactionPinUnlocked, loading: authLoading } = useAuth();
   const { primaryFiat, walletCurrencyCodes } = useCustomerWalletScope();
   const [pendingTxSearch, setPendingTxSearch] = useState<string | null>(null);
   const [pendingWalletModal, setPendingWalletModal] = useState<WalletDeepLinkModal | null>(null);
@@ -57,6 +58,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ activeTab, onTab
   const mobileMainRef = useRef<HTMLElement>(null);
   const isSuspended = user?.status === 'SUSPENDED';
   const isLocked = user?.status === 'LOCKED';
+  const needsPinUnlock = Boolean(user && token && !authLoading && !transactionPinUnlocked && !isLocked);
   const isPendingVerification =
     !isSuspended &&
     !isLocked &&
@@ -257,8 +259,9 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ activeTab, onTab
       data-account-status={user?.status || 'ACTIVE'}
     >
       {isLocked && <AccountLockedModal onLogout={logout} />}
+      {needsPinUnlock && <TransactionPinUnlockModal />}
 
-      <div className={`flex flex-col flex-1 min-h-0 ${isLocked ? 'blur-sm brightness-75 select-none pointer-events-none' : ''}`}>
+      <div className={`flex flex-col flex-1 min-h-0 ${isLocked || needsPinUnlock ? 'blur-sm brightness-75 select-none pointer-events-none' : ''}`}>
       <div className="bg-[#063D32] text-emerald-50 text-[10px] sm:text-[11px] py-1 sm:py-1.5 px-4 font-medium tracking-wide shrink-0">
         <div className="flex items-center justify-between gap-4 max-w-[1600px] mx-auto w-full">
           <div className="flex items-center gap-2 truncate">

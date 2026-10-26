@@ -54,6 +54,10 @@ const MfaConfirmSchema = z.object({
   code: z.string().length(6),
 });
 
+const VerifyTransactionPinSchema = z.object({
+  transactionPin: z.string().regex(/^\d{4}$/, 'Transaction PIN must be exactly 4 digits'),
+});
+
 /**
  * POST /api/v1/auth/register
  */
@@ -95,6 +99,7 @@ authRouter.post('/register', async (req: Request, res: Response, next: NextFunct
       user: result.user,
       sessionToken: result.sessionToken,
       expiresAt: result.expiresAt.toISOString(),
+      transactionPinUnlocked: result.transactionPinUnlocked,
     });
   } catch (err: any) {
     const message = err instanceof Error ? err.message : String(err);
@@ -189,6 +194,7 @@ authRouter.post('/login', async (req: Request, res: Response, next: NextFunction
         : authResult.user,
       sessionToken: authResult.sessionToken,
       expiresAt: authResult.expiresAt.toISOString(),
+      transactionPinUnlocked: authResult.transactionPinUnlocked,
     });
   } catch (err: any) {
     const message = err instanceof Error ? err.message : String(err);
@@ -270,8 +276,67 @@ authRouter.get('/me', authenticate, (req: Request, res: Response) => {
   }
   res.json({
     user: defaultAuthService.sanitizeUser(req.user),
+    transactionPinUnlocked: defaultAuthService.isTransactionPinUnlocked(req.sessionToken!),
   });
 });
+
+/**
+ * POST /api/v1/auth/verify-transaction-pin
+ * Unlocks the current session after post-login PIN challenge.
+ */
+authRouter.post(
+  '/verify-transaction-pin',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const validated = VerifyTransactionPinSchema.parse(req.body);
+      const result = await defaultAuthService.unlockSessionWithTransactionPin(
+        req.sessionToken!,
+        validated.transactionPin,
+      );
+      res.status(200).json({
+        status: 'pin_verified',
+        transactionPinUnlocked: result.transactionPinUnlocked,
+      });
+    } catch (err: any) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes('Invalid transaction PIN')) {
+        res.status(401).json({
+          type: 'https://avenora.com/errors/invalid-transaction-pin',
+          title: 'Invalid Transaction PIN',
+          status: 401,
+          detail: message,
+          instance: req.originalUrl,
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+      if (message.includes('temporarily locked')) {
+        res.status(429).json({
+          type: 'https://avenora.com/errors/account-locked',
+          title: 'Account Temporarily Locked',
+          status: 429,
+          detail: message,
+          instance: req.originalUrl,
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+      if (message.includes('must be exactly 4 digits')) {
+        res.status(400).json({
+          type: 'https://avenora.com/errors/invalid-transaction-pin',
+          title: 'Invalid Transaction PIN',
+          status: 400,
+          detail: message,
+          instance: req.originalUrl,
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+      next(err);
+    }
+  },
+);
 
 /**
  * POST /api/v1/auth/password-reset/request

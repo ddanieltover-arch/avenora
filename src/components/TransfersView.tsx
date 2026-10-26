@@ -20,6 +20,7 @@ import {
   Lock,
   FileText,
 } from 'lucide-react';
+import { TransactionPinConfirmModal } from './auth/TransactionPinConfirmModal.tsx';
 
 interface WalletAccount {
   id: string;
@@ -45,6 +46,8 @@ export const TransfersView: React.FC = () => {
   const [recipient, setRecipient] = useState('');
   const [note, setNote] = useState('Split institutional project expenses');
   const [submitting, setSubmitting] = useState(false);
+  const [pinConfirmOpen, setPinConfirmOpen] = useState(false);
+  const [pinError, setPinError] = useState<string | null>(null);
 
   // Result & feedback
   const [transferResult, setTransferResult] = useState<any | null>(null);
@@ -92,12 +95,20 @@ export const TransfersView: React.FC = () => {
   const requestedAmountNumber = parseFloat(amount) || 0;
   const isOverdraft = requestedAmountNumber > availableBalNumber;
 
-  const handleTransfer = async (e: React.FormEvent) => {
+  const openTransferPinConfirm = (e: React.FormEvent) => {
     e.preventDefault();
     if (!token) return;
     setErrorMessage(null);
     setTransferResult(null);
+    setPinError(null);
+    setPinConfirmOpen(true);
+  };
+
+  const executeTransferWithPin = async (transactionPin: string) => {
+    if (!token) return;
     setSubmitting(true);
+    setPinError(null);
+    setErrorMessage(null);
 
     try {
       const idempotencyKey = `tx_xfer_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
@@ -113,17 +124,23 @@ export const TransfersView: React.FC = () => {
           currency: selectedCurrency,
           amountDecimal: amount,
           note,
+          transactionPin,
         }),
       });
 
       const data = await res.json();
       if (res.ok) {
+        setPinConfirmOpen(false);
         setTransferResult(data);
         fetchAccounts();
+      } else if (res.status === 401 || data.type?.includes('transaction-pin')) {
+        setPinError(data.detail || data.title || 'Invalid transaction PIN.');
       } else {
+        setPinConfirmOpen(false);
         setErrorMessage(data.detail || data.title || 'Internal transfer could not be completed.');
       }
     } catch (err: any) {
+      setPinConfirmOpen(false);
       setErrorMessage(err.message || 'Network error during transfer execution.');
     } finally {
       setSubmitting(false);
@@ -202,7 +219,7 @@ export const TransfersView: React.FC = () => {
             </div>
           )}
 
-          <form onSubmit={handleTransfer} className="space-y-4">
+          <form onSubmit={openTransferPinConfirm} className="space-y-4">
             {/* Currency Selector */}
             <div>
               <label className="block text-xs font-semibold text-[#0f1f1e] mb-1.5">
@@ -325,7 +342,7 @@ export const TransfersView: React.FC = () => {
                 <ArrowRight className="w-4 h-4" />
               )}
               <span>
-                {submitting ? 'Executing Double-Entry Transfer...' : `Transfer ${amount} ${selectedCurrency}`}
+                {`Continue — Transfer ${amount} ${selectedCurrency}`}
               </span>
             </button>
           </form>
@@ -378,6 +395,22 @@ export const TransfersView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {pinConfirmOpen && (
+        <TransactionPinConfirmModal
+          title="Authorize transfer"
+          description={`Enter your 4-digit transaction PIN to send ${amount} ${selectedCurrency}.`}
+          confirmLabel="Confirm transfer"
+          submitting={submitting}
+          errorMessage={pinError}
+          onConfirm={executeTransferWithPin}
+          onCancel={() => {
+            if (submitting) return;
+            setPinConfirmOpen(false);
+            setPinError(null);
+          }}
+        />
+      )}
     </div>
   );
 };

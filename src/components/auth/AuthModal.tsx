@@ -22,8 +22,8 @@ import {
   Eye,
   EyeOff,
   Phone,
-  Hash,
 } from 'lucide-react';
+import { TransactionPinField } from './TransactionPinField.tsx';
 
 export const AuthModal: React.FC = () => {
   const {
@@ -47,7 +47,6 @@ export const AuthModal: React.FC = () => {
   const [countryCode, setCountryCode] = useState('US');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [transactionPin, setTransactionPin] = useState('');
-  const [showTransactionPin, setShowTransactionPin] = useState(false);
   const [totpCode, setTotpCode] = useState('');
   const [resetToken, setResetToken] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -441,33 +440,12 @@ export const AuthModal: React.FC = () => {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-[#0f1f1e] mb-1">
-                  {t.auth.transactionPinLabel}
-                </label>
-                <div className="relative">
-                  <Hash className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type={showTransactionPin ? 'text' : 'password'}
-                    required
-                    inputMode="numeric"
-                    pattern="\d{4}"
-                    maxLength={4}
-                    value={transactionPin}
-                    onChange={(e) => setTransactionPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                    placeholder="••••"
-                    className="w-full pl-9 pr-9 py-2 text-xs font-mono tracking-[0.35em] rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#076c64]/30 focus:border-[#076c64]"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowTransactionPin(!showTransactionPin)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                    aria-label={showTransactionPin ? 'Hide transaction PIN' : 'Show transaction PIN'}
-                  >
-                    {showTransactionPin ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                  </button>
-                </div>
-              </div>
+              <TransactionPinField
+                label={t.auth.transactionPinLabel}
+                value={transactionPin}
+                onChange={setTransactionPin}
+                tone="light"
+              />
 
               <div>
                 <label className="block text-xs font-semibold text-[#0f1f1e] mb-1">

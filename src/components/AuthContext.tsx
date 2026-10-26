@@ -16,6 +16,26 @@ import { buildAdminPath, buildPortalPath, navigateToPath } from '../routing/appR
 
 const STAFF_ROLES = new Set(['SUPPORT', 'COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN']);
 
+async function readApiJson(res: Response): Promise<any> {
+  const text = await res.text();
+  if (!text) {
+    if (!res.ok) {
+      throw new Error(
+        `API unavailable (${res.status}). The backend may not be deployed — use local npm run dev, or redeploy with the Express API enabled.`,
+      );
+    }
+    return {};
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    const snippet = text.replace(/\s+/g, ' ').slice(0, 80);
+    throw new Error(
+      `API returned a non-JSON response (${res.status}): "${snippet}". The /api routes are not reaching the Express server.`,
+    );
+  }
+}
+
 /** Send the user to the customer dashboard (or admin overview for staff on /admin). */
 function redirectToDashboard(role?: AuthUser['role']): void {
   const onAdminPath = window.location.pathname.startsWith('/admin');
@@ -44,6 +64,8 @@ interface AuthContextType {
   user: AuthUser | null;
   token: string | null;
   loading: boolean;
+  /** False until post-login PIN unlock (true immediately after registration). */
+  transactionPinUnlocked: boolean;
   authModalOpen: boolean;
   authModalTab: 'login' | 'register' | 'forgot' | 'reset';
   accountOpeningWelcomeOpen: boolean;
@@ -62,6 +84,7 @@ interface AuthContextType {
     transactionPin: string,
     countryCode: string,
   ) => Promise<void>;
+  verifyTransactionPin: (pin: string) => Promise<void>;
   refreshUser: () => Promise<void>;
   startMfa: () => Promise<{ secret: string; otpauthUri: string }>;
   confirmMfa: (secret: string, code: string) => Promise<{ recoveryCodes: string[] }>;
@@ -86,6 +109,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [transactionPinUnlocked, setTransactionPinUnlocked] = useState(false);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<'login' | 'register' | 'forgot' | 'reset'>('login');
   const [accountOpeningWelcomeOpen, setAccountOpeningWelcomeOpen] = useState(false);
@@ -157,17 +181,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const res = await fetch('/api/v1/auth/me', {
           headers: { Authorization: `Bearer ${savedToken}` },
         });
-        const data = await res.json();
+        const data = await readApiJson(res);
         if (res.ok && data.user) {
           setUser(data.user);
+          setTransactionPinUnlocked(data.transactionPinUnlocked === true);
         } else {
           persistSessionToken(null);
           setToken(null);
+          setTransactionPinUnlocked(false);
         }
       } catch (err) {
         console.error('Failed to restore session', err);
         persistSessionToken(null);
         setToken(null);
+        setTransactionPinUnlocked(false);
       } finally {
         setLoading(false);
       }
@@ -184,7 +211,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password, totpCode }),
       });
-      const data = await res.json();
+      const data = await readApiJson(res);
       if (!res.ok) {
         throw new Error(data.detail || data.title || 'Login failed');
       }
@@ -194,6 +221,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(data.user);
       setToken(data.sessionToken);
       persistSessionToken(data.sessionToken);
+      setTransactionPinUnlocked(data.transactionPinUnlocked === true);
       setAuthModalOpen(false);
       redirectToDashboard(data.user?.role);
       return { requiresMfa: false };
@@ -215,6 +243,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setUser(null);
       setToken(null);
+      setTransactionPinUnlocked(false);
       persistSessionToken(null);
       navigateToPath('/', { replace: true });
       window.dispatchEvent(new PopStateEvent('popstate'));
@@ -244,18 +273,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           countryCode,
         }),
       });
-      const data = await res.json();
+      const data = await readApiJson(res);
       if (!res.ok) {
         throw new Error(data.detail || data.title || 'Registration failed');
       }
       setUser(data.user);
       setToken(data.sessionToken);
       persistSessionToken(data.sessionToken);
+      setTransactionPinUnlocked(data.transactionPinUnlocked !== false);
       setAuthModalOpen(false);
       redirectToDashboard(data.user?.role);
     } finally {
       setLoading(false);
     }
+  };
+
+  const verifyTransactionPin = async (pin: string) => {
+    if (!token) throw new Error('Not authenticated');
+    const res = await fetch('/api/v1/auth/verify-transaction-pin', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ transactionPin: pin }),
+    });
+    const data = await readApiJson(res);
+    if (!res.ok) {
+      throw new Error(data.detail || data.title || 'Invalid transaction PIN');
+    }
+    setTransactionPinUnlocked(true);
   };
 
   const refreshUser = useCallback(async () => {
@@ -264,9 +311,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const res = await fetch('/api/v1/auth/me', {
         headers: { Authorization: `Bearer ${token}` },
       });
-      const data = await res.json();
+      const data = await readApiJson(res);
       if (res.ok && data.user) {
         setUser(data.user);
+        if (typeof data.transactionPinUnlocked === 'boolean') {
+          setTransactionPinUnlocked(data.transactionPinUnlocked);
+        }
       }
     } catch (err) {
       console.error('Failed to refresh user profile', err);
@@ -279,7 +329,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     });
-    const data = await res.json();
+    const data = await readApiJson(res);
     if (!res.ok) throw new Error(data.detail || data.title || 'MFA enrollment initialization failed');
     return { secret: data.secret, otpauthUri: data.otpauthUri };
   };
@@ -294,7 +344,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       },
       body: JSON.stringify({ secret, code }),
     });
-    const data = await res.json();
+    const data = await readApiJson(res);
     if (!res.ok) throw new Error(data.detail || data.title || 'MFA confirmation failed');
     await refreshUser();
     return { recoveryCodes: data.recoveryCodes || [] };
@@ -306,7 +356,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email }),
     });
-    const data = await res.json();
+    const data = await readApiJson(res);
     if (!res.ok) throw new Error(data.detail || data.title || 'Failed to dispatch password reset request');
     return { debugToken: data.debugToken, message: data.message };
   };
@@ -317,7 +367,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: tokenStr, newPassword }),
     });
-    const data = await res.json();
+    const data = await readApiJson(res);
     if (!res.ok) throw new Error(data.detail || data.title || 'Password reset confirmation failed');
   };
 
@@ -331,7 +381,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       },
       body: JSON.stringify({ currentPassword, newPassword }),
     });
-    const data = await res.json();
+    const data = await readApiJson(res);
     if (!res.ok) throw new Error(data.detail || data.title || 'Password change failed');
   };
 
@@ -341,6 +391,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         token,
         loading,
+        transactionPinUnlocked,
         authModalOpen,
         authModalTab,
         accountOpeningWelcomeOpen,
@@ -352,6 +403,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         login,
         logout,
         register,
+        verifyTransactionPin,
         refreshUser,
         startMfa,
         confirmMfa,

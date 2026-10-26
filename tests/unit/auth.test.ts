@@ -138,6 +138,75 @@ describe('Customer Identity, Sessions & MFA Services', () => {
     expect(loginResult.authResult?.user.id).toBe(user.id);
   });
 
+  it('unlocks session with transaction PIN after login and rejects wrong PIN', async () => {
+    const email = 'pin.unlock@example.com';
+    const pin = '4321';
+    await authService.registerCustomer({
+      email,
+      password: 'SecurePassword2026!',
+      fullName: 'PIN Unlock User',
+      phoneNumber: '+12025550199',
+      transactionPin: pin,
+      countryCode: 'US',
+    });
+
+    const loginResult = await authService.login({
+      email,
+      password: 'SecurePassword2026!',
+    });
+    expect(loginResult.requiresMfa).toBe(false);
+    expect(loginResult.authResult?.transactionPinUnlocked).toBe(false);
+    const sessionToken = loginResult.authResult!.sessionToken;
+    expect(authService.isTransactionPinUnlocked(sessionToken)).toBe(false);
+
+    await expect(
+      authService.unlockSessionWithTransactionPin(sessionToken, '9999'),
+    ).rejects.toThrow(/Invalid transaction PIN/);
+    expect(authService.isTransactionPinUnlocked(sessionToken)).toBe(false);
+
+    const unlocked = await authService.unlockSessionWithTransactionPin(sessionToken, pin);
+    expect(unlocked.transactionPinUnlocked).toBe(true);
+    expect(authService.isTransactionPinUnlocked(sessionToken)).toBe(true);
+  });
+
+  it('auto-unlocks transaction PIN on registration session', async () => {
+    const result = await authService.registerCustomer({
+      email: 'pin.register@example.com',
+      password: 'SecurePassword2026!',
+      fullName: 'PIN Register User',
+      ...registrationExtras,
+    });
+    expect(result.transactionPinUnlocked).toBe(true);
+    expect(authService.isTransactionPinUnlocked(result.sessionToken)).toBe(true);
+  });
+
+  it('verifies transaction PIN for money-move checks without changing unlock state', async () => {
+    const { user, sessionToken } = await authService.registerCustomer({
+      email: 'pin.verify@example.com',
+      password: 'SecurePassword2026!',
+      fullName: 'PIN Verify User',
+      phoneNumber: '+12025550188',
+      transactionPin: '2468',
+      countryCode: 'US',
+    });
+
+    // Simulate a fresh login-locked session by creating unlock=false via login
+    await authService.revokeSession(sessionToken);
+    const login = await authService.login({
+      email: 'pin.verify@example.com',
+      password: 'SecurePassword2026!',
+    });
+    const lockedToken = login.authResult!.sessionToken;
+    expect(authService.isTransactionPinUnlocked(lockedToken)).toBe(false);
+
+    await authService.verifyTransactionPinForUser(user.id, '2468');
+    expect(authService.isTransactionPinUnlocked(lockedToken)).toBe(false);
+
+    await expect(authService.verifyTransactionPinForUser(user.id, '0000')).rejects.toThrow(
+      /Invalid transaction PIN/,
+    );
+  });
+
   it('enrolls and verifies TOTP MFA codes and recovery codes', async () => {
     const { user } = await authService.registerCustomer({
       email: 'mfa.user@example.com',
