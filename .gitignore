@@ -8,9 +8,10 @@ dist/
 build/
 .next/
 out/
-api/index.js
 
 # Environment and secrets (CRITICAL: Never commit credentials)
+# NOTE: api/index.js is committed — Vercel validates functions config against
+# files present in the repo before buildCommand runs.
 .env
 .env*.local
 .env.production
