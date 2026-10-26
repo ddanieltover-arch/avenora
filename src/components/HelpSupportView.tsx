@@ -90,21 +90,43 @@ export const HelpSupportView: React.FC = () => {
     return matchesCat && matchesQuery;
   });
 
-  const handleTicketSubmit = (e: React.FormEvent) => {
+  const handleTicketSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
     setTicketSuccess(null);
 
-    setTimeout(() => {
-      const syntheticId = `TKT-2026-${Math.floor(100000 + Math.random() * 900000)}`;
+    try {
+      const res = await fetch('/api/v1/contact/support', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          subject: ticketSubject,
+          message: ticketMessage,
+          category: ticketCategory,
+          priority: ticketPriority,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || data.title || 'Unable to submit inquiry.');
+      }
       setTicketSuccess({
-        id: syntheticId,
-        message: 'Your inquiry has been logged. A support specialist will respond using the contact details on your profile.',
+        id: data.ticketId,
+        message:
+          data.message ||
+          'Your inquiry has been logged. A support specialist will respond using the contact details on your profile.',
       });
       setTicketSubject('');
       setTicketMessage('');
+    } catch (err: unknown) {
+      setTicketSuccess({
+        id: 'ERROR',
+        message: err instanceof Error ? err.message : 'Unable to submit inquiry.',
+      });
+    } finally {
       setSubmitting(false);
-    }, 600);
+    }
   };
 
   return (
@@ -219,15 +241,32 @@ export const HelpSupportView: React.FC = () => {
           </p>
 
           {ticketSuccess && (
-            <div className="p-4 bg-brand-accent-light border border-brand-accent/30 rounded-2xl space-y-2 text-xs text-emerald-900 animate-in fade-in">
-              <div className="flex items-center gap-2 font-bold text-[#076c64]">
-                <CheckCircle2 className="w-4 h-4 text-[#159d79]" />
-                <span>Ticket Registered Successfully</span>
+            <div
+              className={`p-4 rounded-2xl space-y-2 text-xs animate-in fade-in ${
+                ticketSuccess.id === 'ERROR'
+                  ? 'bg-rose-50 border border-rose-200 text-rose-900'
+                  : 'bg-brand-accent-light border border-brand-accent/30 text-emerald-900'
+              }`}
+              role={ticketSuccess.id === 'ERROR' ? 'alert' : 'status'}
+            >
+              <div
+                className={`flex items-center gap-2 font-bold ${
+                  ticketSuccess.id === 'ERROR' ? 'text-rose-700' : 'text-[#076c64]'
+                }`}
+              >
+                <CheckCircle2
+                  className={`w-4 h-4 ${ticketSuccess.id === 'ERROR' ? 'text-rose-600' : 'text-[#159d79]'}`}
+                />
+                <span>
+                  {ticketSuccess.id === 'ERROR' ? 'Unable to submit inquiry' : 'Ticket Registered Successfully'}
+                </span>
               </div>
-              <p className="text-[11px] text-emerald-800">{ticketSuccess.message}</p>
-              <div className="bg-white p-2.5 rounded-xl border border-brand-accent/30 font-mono text-xs font-bold text-[#003933] text-center">
-                Protocol: {ticketSuccess.id}
-              </div>
+              <p className="text-[11px]">{ticketSuccess.message}</p>
+              {ticketSuccess.id !== 'ERROR' && (
+                <div className="bg-white p-2.5 rounded-xl border border-brand-accent/30 font-mono text-xs font-bold text-[#003933] text-center">
+                  Protocol: {ticketSuccess.id}
+                </div>
+              )}
             </div>
           )}
 

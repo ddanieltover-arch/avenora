@@ -11,8 +11,9 @@
 
 import { Money } from '../../domain/money/Money.ts';
 import { getCurrency, isSupportedCurrency } from '../../domain/money/Currency.ts';
-import { UserRole } from './auth.service.ts';
+import { UserRole, defaultAuthService } from './auth.service.ts';
 import { defaultAuditService } from './audit.service.ts';
+import { defaultEmailService, voidEmail } from './email.service.ts';
 
 export type LoanApplicationType = 'PERSONAL' | 'SMALL_BUSINESS';
 export type LoanApplicationStatus =
@@ -321,6 +322,27 @@ export class LoanService {
     // Generate deterministic synthetic assessment
     app.assessment = this.performSyntheticAssessment(app);
 
+    const customer = defaultAuthService.getUserById(userId);
+    const customerName = customer?.fullName || app.applicantName;
+    if (customer?.email) {
+      voidEmail(
+        'loan-submitted',
+        defaultEmailService.sendLoanSubmittedEmail({
+          to: customer.email,
+          fullName: customerName,
+          applicationId: app.id,
+          amount: app.formattedRequestedAmount,
+        }),
+      );
+    }
+    voidEmail(
+      'loan-submitted-staff',
+      defaultEmailService.sendLoanSubmittedStaffEmail({
+        customerName,
+        applicationId: app.id,
+      }),
+    );
+
     return app;
   }
 
@@ -382,6 +404,20 @@ export class LoanService {
         currency: app.currency,
       },
     });
+
+    const customer = defaultAuthService.getUserById(app.userId);
+    if (customer?.email) {
+      voidEmail(
+        'loan-decision',
+        defaultEmailService.sendLoanDecisionEmail({
+          to: customer.email,
+          fullName: customer.fullName || app.applicantName,
+          applicationId: app.id,
+          decision: params.decision,
+          notes: params.notes,
+        }),
+      );
+    }
 
     return app;
   }

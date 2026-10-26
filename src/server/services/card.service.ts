@@ -23,6 +23,7 @@ import { defaultWalletService } from './wallet.service.ts';
 import { assertDoubleEntryInvariant } from '../../domain/ledger/LedgerInvariant.ts';
 import { defaultAuditService } from './audit.service.ts';
 import { defaultAuthService } from './auth.service.ts';
+import { defaultEmailService, voidEmail } from './email.service.ts';
 
 export type CardType = 'DEBIT' | 'CREDIT';
 export type CardForm = 'VIRTUAL' | 'PHYSICAL';
@@ -217,6 +218,26 @@ export class CardService {
       },
     });
 
+    const customer = defaultAuthService.getUserById(params.userId);
+    const customerName = customer?.fullName || params.cardholderName;
+    if (customer?.email) {
+      voidEmail(
+        'card-requested',
+        defaultEmailService.sendCardRequestedEmail({
+          to: customer.email,
+          fullName: customerName,
+          cardLabel: `${card.form} ${card.type} (${card.currency})`,
+        }),
+      );
+    }
+    voidEmail(
+      'card-requested-staff',
+      defaultEmailService.sendCardRequestedStaffEmail({
+        customerName,
+        cardId: card.id,
+      }),
+    );
+
     return card;
   }
 
@@ -281,6 +302,29 @@ export class CardService {
       },
     });
 
+    const customer = defaultAuthService.getUserById(card.userId);
+    if (customer?.email) {
+      if (params.decision === 'APPROVE') {
+        voidEmail(
+          'card-issuance-approved',
+          defaultEmailService.sendCardIssuanceApprovedEmail({
+            to: customer.email,
+            fullName: customer.fullName,
+            last4: card.lastFour,
+          }),
+        );
+      } else {
+        voidEmail(
+          'card-issuance-declined',
+          defaultEmailService.sendCardIssuanceDeclinedEmail({
+            to: customer.email,
+            fullName: customer.fullName,
+            reason: params.reason.trim(),
+          }),
+        );
+      }
+    }
+
     return card;
   }
 
@@ -334,6 +378,18 @@ export class CardService {
         cardholderName: card.syntheticCardholderName,
       },
     });
+
+    const customer = defaultAuthService.getUserById(card.userId);
+    if (customer?.email) {
+      voidEmail(
+        'card-terminated',
+        defaultEmailService.sendCardTerminatedEmail({
+          to: customer.email,
+          fullName: customer.fullName,
+          last4: card.lastFour,
+        }),
+      );
+    }
 
     return { deletedCardId: params.cardId, previousStatus };
   }
@@ -420,6 +476,38 @@ export class CardService {
       },
     });
 
+    const customer = defaultAuthService.getUserById(card.userId);
+    if (customer?.email) {
+      if (params.newStatus === 'FROZEN') {
+        voidEmail(
+          'card-frozen',
+          defaultEmailService.sendCardFrozenEmail({
+            to: customer.email,
+            fullName: customer.fullName,
+            last4: card.lastFour,
+          }),
+        );
+      } else if (params.newStatus === 'ACTIVE_SIMULATED' && prevStatus === 'FROZEN') {
+        voidEmail(
+          'card-unfrozen',
+          defaultEmailService.sendCardUnfrozenEmail({
+            to: customer.email,
+            fullName: customer.fullName,
+            last4: card.lastFour,
+          }),
+        );
+      } else if (params.newStatus === 'TERMINATED') {
+        voidEmail(
+          'card-terminated',
+          defaultEmailService.sendCardTerminatedEmail({
+            to: customer.email,
+            fullName: customer.fullName,
+            last4: card.lastFour,
+          }),
+        );
+      }
+    }
+
     return card;
   }
 
@@ -453,6 +541,20 @@ export class CardService {
     card.formattedDailyLimit = dailyLimit.toDisplayString();
     card.formattedSingleTxLimit = singleLimit.toDisplayString();
     card.updatedAt = new Date();
+
+    const customer = defaultAuthService.getUserById(card.userId);
+    if (customer?.email) {
+      voidEmail(
+        'card-limits-changed',
+        defaultEmailService.sendCardLimitsChangedEmail({
+          to: customer.email,
+          fullName: customer.fullName,
+          last4: card.lastFour,
+          dailyLimit: card.formattedSingleTxLimit,
+          monthlyLimit: card.formattedDailyLimit,
+        }),
+      );
+    }
 
     return card;
   }
@@ -582,6 +684,21 @@ export class CardService {
 
     this.authorizations.set(authId, authorization);
 
+    const customer = defaultAuthService.getUserById(card.userId);
+    if (customer?.email) {
+      voidEmail(
+        'card-auth-hold',
+        defaultEmailService.sendCardAuthHoldEmail({
+          to: customer.email,
+          fullName: customer.fullName,
+          amount: txMoney.toDecimalString(),
+          currency: card.currency,
+          merchant: params.merchantName,
+          last4: card.lastFour,
+        }),
+      );
+    }
+
     return {
       authorization,
       card,
@@ -650,6 +767,21 @@ export class CardService {
     auth.holdStatus = 'SETTLED_SIMULATED';
     auth.ledgerSettleJournalEntryId = journalEntry.id;
     auth.settledAt = new Date();
+
+    const customer = defaultAuthService.getUserById(card.userId);
+    if (customer?.email) {
+      voidEmail(
+        'card-hold-settled',
+        defaultEmailService.sendCardHoldSettledEmail({
+          to: customer.email,
+          fullName: customer.fullName,
+          amount: Money.fromMinor(auth.amountMinor, auth.currency).toDecimalString(),
+          currency: auth.currency,
+          outcome: 'settled',
+          merchant: auth.merchantName,
+        }),
+      );
+    }
 
     return {
       authorization: auth,
@@ -725,6 +857,21 @@ export class CardService {
     const updatedSpent = dailySpent >= amountMinor ? dailySpent - amountMinor : 0n;
     card.dailySpentMinor = updatedSpent.toString();
     card.updatedAt = new Date();
+
+    const customer = defaultAuthService.getUserById(card.userId);
+    if (customer?.email) {
+      voidEmail(
+        'card-hold-released',
+        defaultEmailService.sendCardHoldSettledEmail({
+          to: customer.email,
+          fullName: customer.fullName,
+          amount: Money.fromMinor(auth.amountMinor, auth.currency).toDecimalString(),
+          currency: auth.currency,
+          outcome: 'released',
+          merchant: auth.merchantName,
+        }),
+      );
+    }
 
     return {
       authorization: auth,

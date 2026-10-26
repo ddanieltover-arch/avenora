@@ -13,6 +13,7 @@ import { CountryIdentifierResult, IIdentifierProvider } from '../../domain/count
 import { isKycBypassEnabled } from '../../config/prototypeAccess.ts';
 import { AuthService, defaultAuthService } from './auth.service.ts';
 import { defaultAuditService } from './audit.service.ts';
+import { defaultEmailService, voidEmail } from './email.service.ts';
 import { defaultIdentifierProvider } from './identifier.service.ts';
 import type { KycProfileRecord } from './kyc.service.ts';
 
@@ -366,6 +367,21 @@ export class DomesticBankAccountService {
         this.pixKeyOwner.set(pixKey, params.userId);
       }
       this.auditGeneration(params.userId, generated, params.correlationId);
+
+      if (user) {
+        const accountSummary =
+          generated.formattedValue || generated.maskedValue || generated.rawValue || generated.id;
+        voidEmail(
+          'domestic-account-issued',
+          defaultEmailService.sendDomesticAccountIssuedEmail({
+            to: user.email,
+            fullName: user.fullName,
+            accountSummary,
+            currency,
+          }),
+        );
+      }
+
       return generated;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown generation error';
@@ -382,6 +398,19 @@ export class DomesticBankAccountService {
         reason: 'Domestic account generation failed',
         details: { userId: params.userId, error: message, correlationId: params.correlationId },
       });
+
+      const notifyUser = user ?? this.authService.getUserById(params.userId);
+      if (notifyUser) {
+        voidEmail(
+          'domestic-account-failed',
+          defaultEmailService.sendDomesticAccountFailedEmail({
+            to: notifyUser.email,
+            fullName: notifyUser.fullName,
+            reason: message,
+          }),
+        );
+      }
+
       return failed;
     }
   }

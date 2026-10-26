@@ -18,8 +18,18 @@ import {
   COUNTRY_PROVIDER_CAPABILITY_MATRIX,
   PROVIDER_INTEGRATION_PREREQUISITES,
 } from '../../domain/country/ProviderCapabilityMatrix.ts';
+import {
+  EMAIL_TEMPLATE_IDS,
+  PLANNED_EMAIL_TEMPLATE_IDS,
+  renderEmailPreview,
+} from '../emails/catalog.ts';
 
 export const systemRouter = Router();
+
+function isEmailPreviewAllowed(): boolean {
+  const config = getValidatedConfig();
+  return config.NODE_ENV !== 'production' || config.PROTOTYPE_MODE === true;
+}
 
 const GenerateIdentifierSchema = z.object({
   countryCode: z.enum(['US', 'GB', 'ES', 'DE', 'BR'] as [SupportedCountryCode, ...SupportedCountryCode[]]),
@@ -46,6 +56,63 @@ const ValidateIdentifierSchema = z.object({
     'PIX_KEY',
   ] as [IdentifierType, ...IdentifierType[]]),
   value: z.string().min(1, 'Value is required'),
+});
+
+/**
+ * GET /api/v1/system/email-preview
+ * Lists available (implemented) and planned email template IDs.
+ * Gated to non-production or prototype mode.
+ */
+systemRouter.get('/email-preview', (_req: Request, res: Response) => {
+  if (!isEmailPreviewAllowed()) {
+    res.status(404).json({
+      type: 'https://avenora.com/errors/not-found',
+      title: 'Not Found',
+      status: 404,
+      detail: 'Email preview is unavailable in this environment.',
+    });
+    return;
+  }
+
+  res.json({
+    available: EMAIL_TEMPLATE_IDS,
+    planned: PLANNED_EMAIL_TEMPLATE_IDS,
+    previewPath: '/api/v1/system/email-preview/:id',
+  });
+});
+
+/**
+ * GET /api/v1/system/email-preview/:id
+ * Returns full HTML for a sample transactional email (design review).
+ * Gated to non-production or prototype mode.
+ */
+systemRouter.get('/email-preview/:id', (req: Request, res: Response) => {
+  if (!isEmailPreviewAllowed()) {
+    res.status(404).json({
+      type: 'https://avenora.com/errors/not-found',
+      title: 'Not Found',
+      status: 404,
+      detail: 'Email preview is unavailable in this environment.',
+    });
+    return;
+  }
+
+  const id = String(req.params.id || '').trim().toLowerCase();
+  const payload = renderEmailPreview(id);
+  if (!payload) {
+    res.status(404).json({
+      type: 'https://avenora.com/errors/not-found',
+      title: 'Email Template Not Found',
+      status: 404,
+      detail: `No preview is available for template "${id}". Available: ${EMAIL_TEMPLATE_IDS.join(', ')}.`,
+      available: EMAIL_TEMPLATE_IDS,
+    });
+    return;
+  }
+
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('X-Avenora-Email-Subject', payload.subject);
+  res.send(payload.html);
 });
 
 /**

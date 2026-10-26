@@ -107,8 +107,10 @@ npx prisma migrate deploy
 - `POST /api/v1/auth/login`: Authenticate customer or staff, supports TOTP MFA codes and recovery codes. Sets HttpOnly cookie.
 - `POST /api/v1/auth/logout`: Revokes active session.
 - `GET /api/v1/auth/me`: Retrieves current authenticated user profile and roles.
-- `POST /api/v1/auth/password-reset/request`: Dispatches single-use short-lived reset token.
+- `POST /api/v1/auth/password-reset/request`: Dispatches single-use short-lived reset token via Resend email.
 - `POST /api/v1/auth/password-reset/confirm`: Resets password and invalidates all existing sessions.
+- `POST /api/v1/contact`: Public contact form — emails support + acknowledgement to sender (Resend).
+- `POST /api/v1/contact/support`: Support ticket inquiry (session optional) — emails support inbox (Resend).
 - `POST /api/v1/auth/mfa/enroll`: Generates base32 TOTP secret and `otpauth://` URI.
 - `POST /api/v1/auth/mfa/confirm`: Validates 6-digit TOTP code and generates single-use recovery codes.
 

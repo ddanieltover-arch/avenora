@@ -29,16 +29,39 @@ export const ContactPage: React.FC<ContactPageProps> = ({ onNavigateHelp }) => {
   const [message, setMessage] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [reference, setReference] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const handleSubmit = (event: React.FormEvent) => {
+  const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
-    const ref = `AVN-${Date.now().toString(36).toUpperCase().slice(-8)}`;
-    setReference(ref);
-    setSubmitted(true);
-    setFullName('');
-    setEmail('');
-    setSubject('');
-    setMessage('');
+    setSubmitting(true);
+    setErrorMessage(null);
+    try {
+      const res = await fetch('/api/v1/contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: fullName,
+          email,
+          subject,
+          message,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || data.title || 'Unable to send your message.');
+      }
+      setReference(data.reference || `AVN-${Date.now().toString(36).toUpperCase().slice(-8)}`);
+      setSubmitted(true);
+      setFullName('');
+      setEmail('');
+      setSubject('');
+      setMessage('');
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : 'Unable to send your message.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -79,6 +102,15 @@ export const ContactPage: React.FC<ContactPageProps> = ({ onNavigateHelp }) => {
                     <p>{c.success}</p>
                     <p className="mt-1 font-mono text-xs text-[#003933]">{reference}</p>
                   </div>
+                </div>
+              )}
+
+              {errorMessage && (
+                <div
+                  className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-800"
+                  role="alert"
+                >
+                  {errorMessage}
                 </div>
               )}
 
@@ -125,10 +157,11 @@ export const ContactPage: React.FC<ContactPageProps> = ({ onNavigateHelp }) => {
                 </div>
                 <button
                   type="submit"
-                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-[#076c64] hover:bg-[#003933] text-white text-sm font-semibold shadow-sm transition cursor-pointer"
+                  disabled={submitting}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-[#076c64] hover:bg-[#003933] text-white text-sm font-semibold shadow-sm transition cursor-pointer disabled:opacity-60"
                 >
                   <Send className="w-4 h-4" aria-hidden />
-                  {c.send}
+                  {submitting ? 'Sending…' : c.send}
                 </button>
               </form>
             </div>

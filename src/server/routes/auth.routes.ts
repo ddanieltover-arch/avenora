@@ -284,8 +284,9 @@ authRouter.post('/password-reset/request', async (req: Request, res: Response, n
     res.status(200).json({
       status: 'success',
       message: 'If the email exists, a password reset link has been dispatched.',
-      // For development/prototype simulation convenience, return token preview
-      debugToken: result.token,
+      emailSent: result.emailSent ?? false,
+      // Prototype / local DX only — omitted when production email delivery succeeds
+      ...(result.token ? { debugToken: result.token } : {}),
     });
   } catch (err) {
     next(err);

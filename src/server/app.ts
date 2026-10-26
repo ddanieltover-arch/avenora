@@ -21,6 +21,7 @@ import { grantRouter } from './routes/grant.routes.ts';
 import { cardRouter } from './routes/card.routes.ts';
 import { adminRouter } from './routes/admin.routes.ts';
 import { domesticBankAccountRouter } from './routes/domesticBankAccount.routes.ts';
+import { contactRouter } from './routes/contact.routes.ts';
 
 export function createExpressApp(): Express {
   const app = express();
@@ -58,6 +59,7 @@ export function createExpressApp(): Express {
   app.use('/api/v1/cards', cardRouter);
   app.use('/api/v1/admin', adminRouter);
   app.use('/api/v1/domestic-accounts', domesticBankAccountRouter);
+  app.use('/api/v1/contact', contactRouter);
 
   // Unmatched API routes must return JSON (Vite SPA middleware may otherwise yield an empty body).
   app.use('/api', (req: Request, res: Response) => {

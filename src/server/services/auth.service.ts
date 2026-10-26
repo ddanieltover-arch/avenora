@@ -14,6 +14,7 @@
 import { SecurityService } from './security.service.ts';
 import { defaultLedgerService } from './ledger.service.ts';
 import { defaultAuditService } from './audit.service.ts';
+import { defaultEmailService, voidEmail } from './email.service.ts';
 import { getValidatedConfig } from '../../config/env.config.ts';
 import { isKycBypassEnabled } from '../../config/prototypeAccess.ts';
 
@@ -257,6 +258,11 @@ export class AuthService {
     // Automatically provision user's personal chart of account liabilities in the ledger
     defaultLedgerService.provisionCustomerAccounts(userId, user.fullName, user.countryCode);
 
+    // Best-effort welcome email — never block registration
+    void defaultEmailService
+      .sendWelcomeEmail({ to: user.email, fullName: user.fullName })
+      .catch((err) => console.error('[auth] welcome email failed:', err));
+
     // Create session
     return this.createSession(user, params.ipAddress, params.userAgent);
   }
@@ -297,6 +303,14 @@ export class AuthService {
       user.failedLoginAttempts += 1;
       if (user.failedLoginAttempts >= this.MAX_FAILED_ATTEMPTS) {
         user.lockedUntil = new Date(Date.now() + this.LOCKOUT_DURATION_MS);
+        voidEmail(
+          'login-lockout',
+          defaultEmailService.sendLoginLockoutEmail({
+            to: user.email,
+            fullName: user.fullName,
+            lockMinutes: Math.ceil(this.LOCKOUT_DURATION_MS / 60000),
+          }),
+        );
       }
       throw genericAuthError;
     }
@@ -359,8 +373,35 @@ export class AuthService {
       }
     }
 
+    // Detect new device before session create (new session would otherwise always match)
+    const isNewDevice = !Array.from(this.sessionsByTokenHash.values()).some(
+      (s) => s.userId === user.id && s.userAgent === params.userAgent,
+    );
+
     // Create session (with session rotation)
     const authResult = await this.createSession(user, params.ipAddress, params.userAgent);
+    const signedInAt = new Date().toISOString();
+    voidEmail(
+      'login-success',
+      defaultEmailService.sendLoginSuccessEmail({
+        to: user.email,
+        fullName: user.fullName,
+        ipAddress: params.ipAddress,
+        signedInAt,
+      }),
+    );
+    if (isNewDevice) {
+      voidEmail(
+        'login-new-device',
+        defaultEmailService.sendLoginNewDeviceEmail({
+          to: user.email,
+          fullName: user.fullName,
+          ipAddress: params.ipAddress,
+          userAgent: params.userAgent,
+          signedInAt,
+        }),
+      );
+    }
     return { requiresMfa: false, authResult };
   }
 
@@ -419,9 +460,12 @@ export class AuthService {
   }
 
   /**
-   * Initiates password reset workflow: generates single-use short-lived token.
+   * Initiates password reset workflow: generates single-use short-lived token
+   * and dispatches it via Resend when email is configured.
    */
-  public async requestPasswordReset(email: string): Promise<{ token?: string }> {
+  public async requestPasswordReset(
+    email: string
+  ): Promise<{ token?: string; emailSent?: boolean }> {
     const user = this.usersByEmail.get(email.trim().toLowerCase());
     if (!user) {
       // Safe no-op to prevent user enumeration
@@ -441,7 +485,22 @@ export class AuthService {
     };
 
     this.resetTokensByHash.set(tokenHash, record);
-    return { token: rawToken };
+
+    const emailResult = await defaultEmailService.sendPasswordResetEmail({
+      to: user.email,
+      fullName: user.fullName,
+      resetToken: rawToken,
+    });
+
+    const config = getValidatedConfig();
+    // Only expose the raw token in non-production / when email was skipped (prototype DX)
+    const exposeDebugToken =
+      !emailResult.sent || config.PROTOTYPE_MODE || config.NODE_ENV !== 'production';
+
+    return {
+      token: exposeDebugToken ? rawToken : undefined,
+      emailSent: emailResult.sent,
+    };
   }
 
   /**
@@ -473,6 +532,14 @@ export class AuthService {
 
     // Invalidate all existing sessions to enforce security hygiene
     await this.revokeAllUserSessions(user.id);
+
+    voidEmail(
+      'password-reset-completed',
+      defaultEmailService.sendPasswordResetCompletedEmail({
+        to: user.email,
+        fullName: user.fullName,
+      }),
+    );
   }
 
   /**
@@ -495,6 +562,14 @@ export class AuthService {
 
     user.passwordHash = await SecurityService.hashPassword(newPassword);
     user.updatedAt = new Date();
+
+    voidEmail(
+      'password-changed',
+      defaultEmailService.sendPasswordChangedEmail({
+        to: user.email,
+        fullName: user.fullName,
+      }),
+    );
   }
 
   /**
@@ -529,6 +604,14 @@ export class AuthService {
     user.mfaRecoveryCodes = hashedCodes;
     user.updatedAt = new Date();
 
+    voidEmail(
+      'mfa-enrolled',
+      defaultEmailService.sendMfaEnrolledEmail({
+        to: user.email,
+        fullName: user.fullName,
+      }),
+    );
+
     return { recoveryCodes: rawCodes };
   }
 
@@ -555,11 +638,21 @@ export class AuthService {
       }
       return user.status;
     }
+    const prevStatus = user.status;
     const nextStatus: UserStatus =
       user.kycStatus === 'APPROVED' ? 'ACTIVE' : 'PENDING_VERIFICATION';
     if (user.status !== nextStatus) {
       user.status = nextStatus;
       user.updatedAt = new Date();
+      if (nextStatus === 'PENDING_VERIFICATION' && prevStatus === 'ACTIVE') {
+        voidEmail(
+          'pending-verification',
+          defaultEmailService.sendPendingVerificationEmail({
+            to: user.email,
+            fullName: user.fullName,
+          }),
+        );
+      }
     }
     return user.status;
   }
@@ -732,6 +825,37 @@ export class AuthService {
       },
     });
 
+    if (params.newStatus === 'SUSPENDED') {
+      voidEmail(
+        'account-suspended',
+        defaultEmailService.sendAccountSuspendedEmail({
+          to: targetUser.email,
+          fullName: targetUser.fullName,
+          reason: params.reason.trim(),
+        }),
+      );
+    } else if (params.newStatus === 'LOCKED') {
+      voidEmail(
+        'account-locked',
+        defaultEmailService.sendAccountLockedEmail({
+          to: targetUser.email,
+          fullName: targetUser.fullName,
+          reason: params.reason.trim(),
+        }),
+      );
+    } else if (
+      params.newStatus === 'ACTIVE' &&
+      (prevStatus === 'SUSPENDED' || prevStatus === 'LOCKED')
+    ) {
+      voidEmail(
+        'account-restored',
+        defaultEmailService.sendAccountRestoredEmail({
+          to: targetUser.email,
+          fullName: targetUser.fullName,
+        }),
+      );
+    }
+
     return this.sanitizeUser(targetUser);
   }
 
@@ -793,6 +917,15 @@ export class AuthService {
       },
     });
 
+    voidEmail(
+      'role-changed',
+      defaultEmailService.sendRoleChangedEmail({
+        to: targetUser.email,
+        fullName: targetUser.fullName,
+        newRole: params.newRole,
+      }),
+    );
+
     return this.sanitizeUser(targetUser);
   }
 
@@ -840,6 +973,7 @@ export class AuthService {
     }
 
     const email = targetUser.email;
+    const fullName = targetUser.fullName;
     const role = targetUser.role;
 
     for (const session of this.sessionsByTokenHash.values()) {
@@ -871,9 +1005,17 @@ export class AuthService {
       details: {
         targetEmail: email,
         targetRole: role,
-        targetFullName: targetUser.fullName,
+        targetFullName: fullName,
       },
     });
+
+    voidEmail(
+      'account-deleted',
+      defaultEmailService.sendAccountDeletedEmail({
+        to: email,
+        fullName,
+      }),
+    );
 
     return { deletedUserId: params.targetUserId, email };
   }

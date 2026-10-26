@@ -25,6 +25,8 @@ export const HelpFaqPage: React.FC = () => {
   const [inquiryCategory, setInquiryCategory] = useState('wallets');
   const [inquiryMessage, setInquiryMessage] = useState('');
   const [ticketReference, setTicketReference] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const faqs = [
     {
@@ -72,12 +74,35 @@ export const HelpFaqPage: React.FC = () => {
       faq.category.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
-  const handleSupportSubmit = (e: React.FormEvent) => {
+  const handleSupportSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inquiryName || !inquiryMessage) return;
-    const ref = `TKT-AVN-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-    setTicketReference(ref);
-    setInquiryMessage('');
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      const res = await fetch('/api/v1/contact/support', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: inquiryName,
+          email: inquiryEmail || undefined,
+          subject: `Help Center: ${inquiryCategory}`,
+          message: inquiryMessage,
+          category: inquiryCategory,
+          priority: 'STANDARD',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || data.title || 'Unable to submit inquiry.');
+      }
+      setTicketReference(data.ticketId || `TKT-${Date.now().toString(36).toUpperCase()}`);
+      setInquiryMessage('');
+    } catch (err: unknown) {
+      setSubmitError(err instanceof Error ? err.message : 'Unable to submit inquiry.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -157,6 +182,11 @@ export const HelpFaqPage: React.FC = () => {
                 </div>
               </div>
             )}
+            {submitError && (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-800" role="alert">
+                {submitError}
+              </div>
+            )}
           </div>
 
           <form
@@ -176,9 +206,10 @@ export const HelpFaqPage: React.FC = () => {
             />
             <input
               type="email"
+              required
               value={inquiryEmail}
               onChange={(e) => setInquiryEmail(e.target.value)}
-              placeholder="Email (optional)"
+              placeholder="Email"
               className="w-full px-3 py-2.5 rounded-lg bg-white/10 border border-white/20 text-sm placeholder:text-emerald-100/50 focus:outline-none focus:ring-2 focus:ring-[#C6A568]/40"
             />
             <select
@@ -202,10 +233,11 @@ export const HelpFaqPage: React.FC = () => {
             />
             <button
               type="submit"
-              className="w-full flex items-center justify-center gap-2 bg-[#C6A568] hover:bg-amber-600 text-[#003933] font-semibold text-sm py-3 rounded-xl transition"
+              disabled={submitting}
+              className="w-full flex items-center justify-center gap-2 bg-[#C6A568] hover:bg-amber-600 text-[#003933] font-semibold text-sm py-3 rounded-xl transition disabled:opacity-60"
             >
               <Send className="w-4 h-4" />
-              {t.help.contactSupport}
+              {submitting ? 'Sending…' : t.help.contactSupport}
             </button>
           </form>
         </div>

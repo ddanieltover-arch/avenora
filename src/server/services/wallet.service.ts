@@ -20,6 +20,7 @@ import { generateSimpleHash } from '../../domain/common/Idempotency.ts';
 import { UserRole } from './auth.service.ts';
 import { defaultAuditService } from './audit.service.ts';
 import { defaultAuthService } from './auth.service.ts';
+import { defaultEmailService, voidEmail } from './email.service.ts';
 import { getWalletCurrencyCodesForCountry } from '../../domain/country/countryPrimaryCurrency.ts';
 import {
   PLATFORM_BTC_DEPOSIT_ADDRESS,
@@ -619,6 +620,36 @@ export class WalletService {
       narration: params.note || `Internal transfer from ${senderWallet.name || senderUserId}`,
     });
 
+    const amountStr = money.toDecimalString();
+    const senderUser = defaultAuthService.getUserById(senderUserId);
+    const recipientUser = defaultAuthService.getUserById(recipientWallet.userId);
+    if (senderUser) {
+      voidEmail(
+        'transfer-sent',
+        defaultEmailService.sendTransferSentEmail({
+          to: senderUser.email,
+          fullName: senderUser.fullName,
+          amount: amountStr,
+          currency,
+          recipient: recipientUser?.fullName || recipientUser?.email || recipientEmailOrId,
+          reference: refNum,
+        }),
+      );
+    }
+    if (recipientUser) {
+      voidEmail(
+        'transfer-received',
+        defaultEmailService.sendTransferReceivedEmail({
+          to: recipientUser.email,
+          fullName: recipientUser.fullName,
+          amount: amountStr,
+          currency,
+          sender: senderUser?.fullName || senderUser?.email || senderWallet.name || senderUserId,
+          reference: refNum,
+        }),
+      );
+    }
+
     return result;
   }
 
@@ -814,6 +845,24 @@ export class WalletService {
     };
 
     this.recordIdempotency(key, userId, 'FX_CONVERSION', params, result);
+
+    const fxUser = defaultAuthService.getUserById(userId);
+    if (fxUser) {
+      const srcMoney = Money.fromMinor(srcMinor, quote.sourceCurrency);
+      voidEmail(
+        'fx-converted',
+        defaultEmailService.sendFxConvertedEmail({
+          to: fxUser.email,
+          fullName: fxUser.fullName,
+          fromAmount: srcMoney.toDecimalString(),
+          fromCurrency: quote.sourceCurrency,
+          toAmount: destMoney.toDecimalString(),
+          toCurrency: quote.destinationCurrency,
+          rate: quote.exchangeRate,
+        }),
+      );
+    }
+
     return result;
   }
 
@@ -965,6 +1014,30 @@ export class WalletService {
       },
     });
 
+    const depositUser = defaultAuthService.getUserById(params.userId);
+    if (depositUser) {
+      const amountStr = money.toDecimalString();
+      voidEmail(
+        'deposit-requested',
+        defaultEmailService.sendDepositRequestedEmail({
+          to: depositUser.email,
+          fullName: depositUser.fullName,
+          amount: amountStr,
+          currency,
+          reference: refNum,
+        }),
+      );
+      voidEmail(
+        'deposit-staff',
+        defaultEmailService.sendDepositStaffEmail({
+          customerName: depositUser.fullName,
+          amount: amountStr,
+          currency,
+          depositId: record.id,
+        }),
+      );
+    }
+
     return record;
   }
 
@@ -1078,6 +1151,20 @@ export class WalletService {
       },
     });
 
+    const approvedUser = defaultAuthService.getUserById(record.userId);
+    if (approvedUser) {
+      voidEmail(
+        'deposit-approved',
+        defaultEmailService.sendDepositApprovedEmail({
+          to: approvedUser.email,
+          fullName: approvedUser.fullName,
+          amount: record.amountDecimal,
+          currency: record.currency,
+          reference: record.referenceNumber,
+        }),
+      );
+    }
+
     return record;
   }
 
@@ -1177,6 +1264,20 @@ export class WalletService {
         releaseJournalEntryId: releaseEntry.id,
       },
     });
+
+    const rejectedUser = defaultAuthService.getUserById(record.userId);
+    if (rejectedUser) {
+      voidEmail(
+        'deposit-rejected',
+        defaultEmailService.sendDepositRejectedEmail({
+          to: rejectedUser.email,
+          fullName: rejectedUser.fullName,
+          amount: record.amountDecimal,
+          currency: record.currency,
+          reason: params.reason.trim(),
+        }),
+      );
+    }
 
     return record;
   }
@@ -1291,6 +1392,30 @@ export class WalletService {
         bankingDetails,
       },
     });
+
+    const withdrawalUser = defaultAuthService.getUserById(params.userId);
+    if (withdrawalUser) {
+      const amountStr = money.toDecimalString();
+      voidEmail(
+        'withdrawal-requested',
+        defaultEmailService.sendWithdrawalRequestedEmail({
+          to: withdrawalUser.email,
+          fullName: withdrawalUser.fullName,
+          amount: amountStr,
+          currency,
+          reference: refNum,
+        }),
+      );
+      voidEmail(
+        'withdrawal-staff',
+        defaultEmailService.sendWithdrawalStaffEmail({
+          customerName: withdrawalUser.fullName,
+          amount: amountStr,
+          currency,
+          withdrawalId: record.id,
+        }),
+      );
+    }
 
     return record;
   }
@@ -1413,6 +1538,19 @@ export class WalletService {
       },
     });
 
+    const approvedWthUser = defaultAuthService.getUserById(record.userId);
+    if (approvedWthUser) {
+      voidEmail(
+        'withdrawal-approved',
+        defaultEmailService.sendWithdrawalApprovedEmail({
+          to: approvedWthUser.email,
+          fullName: approvedWthUser.fullName,
+          amount: record.amountDecimal,
+          currency: record.currency,
+        }),
+      );
+    }
+
     return record;
   }
 
@@ -1514,6 +1652,20 @@ export class WalletService {
         releaseJournalEntryId: releaseEntry.id,
       },
     });
+
+    const rejectedWthUser = defaultAuthService.getUserById(record.userId);
+    if (rejectedWthUser) {
+      voidEmail(
+        'withdrawal-rejected',
+        defaultEmailService.sendWithdrawalRejectedEmail({
+          to: rejectedWthUser.email,
+          fullName: rejectedWthUser.fullName,
+          amount: record.amountDecimal,
+          currency: record.currency,
+          reason: params.reason.trim(),
+        }),
+      );
+    }
 
     return record;
   }
@@ -1629,6 +1781,17 @@ export class WalletService {
         },
       });
 
+      voidEmail(
+        'admin-adjustment-queued',
+        defaultEmailService.sendAdminAdjustmentQueuedEmail({
+          to: target.email,
+          fullName: target.fullName,
+          direction: 'CREDIT',
+          amount: money.toDecimalString(),
+          currency,
+        }),
+      );
+
       return { direction: 'CREDIT', deposit };
     }
 
@@ -1704,6 +1867,17 @@ export class WalletService {
         destinationRail: 'ADMIN_ADJUSTMENT',
       },
     });
+
+    voidEmail(
+      'admin-adjustment-queued',
+      defaultEmailService.sendAdminAdjustmentQueuedEmail({
+        to: target.email,
+        fullName: target.fullName,
+        direction: 'DEBIT',
+        amount: money.toDecimalString(),
+        currency,
+      }),
+    );
 
     return { direction: 'DEBIT', withdrawal };
   }
@@ -2260,6 +2434,23 @@ export class WalletService {
       },
     });
 
+    if (tx.userId) {
+      const affectedUser = defaultAuthService.getUserById(tx.userId);
+      if (affectedUser) {
+        const amountStr = Money.fromMinor(tx.amountMinor, tx.currency).toDecimalString();
+        voidEmail(
+          'transaction-reversed',
+          defaultEmailService.sendTransactionReversedEmail({
+            to: affectedUser.email,
+            fullName: affectedUser.fullName,
+            amount: amountStr,
+            currency: tx.currency,
+            transactionId: tx.transactionId,
+          }),
+        );
+      }
+    }
+
     return {
       originalTransaction: tx,
       compensatingTransaction: compensatingTx,
@@ -2291,7 +2482,7 @@ export class WalletService {
     const endingBalanceMinor = currAccount ? BigInt(currAccount.availableBalanceMinor) : 0n;
     const startingBalanceMinor = endingBalanceMinor - totalCreditsMinor + totalDebitsMinor;
 
-    return {
+    const statement = {
       statementId: `STMT-${currency}-${stYear}${String(stMonth).padStart(2, '0')}-${userId.slice(-6).toUpperCase()}`,
       period: `${stYear}-${String(stMonth).padStart(2, '0')}`,
       currency,
@@ -2311,6 +2502,24 @@ export class WalletService {
       legalNotice:
         'This statement is provided for your records. Retain it with your tax and accounting documents as required in your jurisdiction.',
     };
+
+    const statementUser = defaultAuthService.getUserById(userId);
+    if (statementUser) {
+      const periodLabel = new Date(stYear, stMonth - 1, 1).toLocaleString('en-US', {
+        month: 'long',
+        year: 'numeric',
+      });
+      voidEmail(
+        'statement-ready',
+        defaultEmailService.sendStatementReadyEmail({
+          to: statementUser.email,
+          fullName: statementUser.fullName,
+          periodLabel,
+        }),
+      );
+    }
+
+    return statement;
   }
 
   public getBtcDepositInstructions() {
@@ -2337,6 +2546,18 @@ export class WalletService {
       mimeType: params.mimeType,
       fileSize: params.fileSize,
     });
+
+    const btcUser = defaultAuthService.getUserById(params.userId);
+    if (btcUser) {
+      voidEmail(
+        'btc-deposit-proof',
+        defaultEmailService.sendBtcDepositProofEmail({
+          to: btcUser.email,
+          fullName: btcUser.fullName,
+          amount: pending.amountDecimal,
+        }),
+      );
+    }
 
     return {
       id: pending.id,

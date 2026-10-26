@@ -12,6 +12,8 @@
 
 import crypto from 'crypto';
 import { getValidatedConfig } from '../../config/env.config.ts';
+import { defaultAuthService } from './auth.service.ts';
+import { defaultEmailService, voidEmail } from './email.service.ts';
 
 export interface WebhookVerificationResult {
   isValid: boolean;
@@ -201,15 +203,64 @@ export class WebhookService {
 
     // Dispatch permitted mock event types
     switch (event.eventType) {
-      case 'mock.deposit.cleared':
+      case 'mock.deposit.cleared': {
         processingMessage = `Mock clearing acknowledged for tx ref: ${event.data.referenceNumber || 'N/A'}`;
+        const depositUser = event.data.userId
+          ? defaultAuthService.getUserById(event.data.userId)
+          : undefined;
+        if (depositUser?.email) {
+          voidEmail(
+            'provider-deposit-cleared',
+            defaultEmailService.sendProviderDepositClearedEmail({
+              to: depositUser.email,
+              fullName: depositUser.fullName,
+              amount: event.data.amountDecimal,
+              currency: event.data.currency,
+              reference: event.data.referenceNumber,
+            }),
+          );
+        }
         break;
-      case 'mock.wire.inbound':
+      }
+      case 'mock.wire.inbound': {
         processingMessage = `Inbound wire notification captured for user: ${event.data.userId || 'N/A'}`;
+        voidEmail(
+          'provider-wire-inbound-staff',
+          defaultEmailService.sendProviderWireInboundStaffEmail({
+            reference: event.data.referenceNumber,
+            amount: event.data.amountDecimal,
+            currency: event.data.currency,
+          }),
+        );
+        const wireUser = event.data.userId
+          ? defaultAuthService.getUserById(event.data.userId)
+          : undefined;
+        if (wireUser?.email) {
+          voidEmail(
+            'provider-wire-inbound',
+            defaultEmailService.sendProviderWireInboundEmail({
+              to: wireUser.email,
+              fullName: wireUser.fullName,
+              amount: event.data.amountDecimal,
+              currency: event.data.currency,
+              reference: event.data.referenceNumber,
+            }),
+          );
+        }
         break;
-      case 'mock.compliance.flag':
+      }
+      case 'mock.compliance.flag': {
         processingMessage = `Simulated risk flag recorded for evaluation: ${event.data.reason || 'None'}`;
+        voidEmail(
+          'compliance-flag',
+          defaultEmailService.sendComplianceFlagEmail({
+            flagType: event.eventType,
+            reference: event.data.referenceNumber || event.data.providerTxId,
+            detail: event.data.reason,
+          }),
+        );
         break;
+      }
       case 'mock.health.ping':
         processingMessage = 'Provider webhook heartbeat successfully acknowledged.';
         break;

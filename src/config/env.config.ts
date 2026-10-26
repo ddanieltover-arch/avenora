@@ -61,6 +61,16 @@ const EnvSchema = z.object({
 
   // CORS
   CORS_ALLOWED_ORIGINS: z.string().default('http://localhost:3000'),
+
+  // Transactional email (Resend) — optional; sends are skipped when unset
+  RESEND_API_KEY: z.string().optional().default(''),
+  EMAIL_FROM: z.string().optional().default('Avenora Bank <noreply@avenorabank.com>'),
+  EMAIL_FROM_ADDRESS: z.string().email().optional().default('noreply@avenorabank.com'),
+  EMAIL_FROM_NAME: z.string().optional().default('Avenora Bank'),
+  EMAIL_REPLY_TO: z.string().email().optional().default('support@avenorabank.com'),
+  SUPPORT_EMAIL: z.string().email().optional().default('support@avenorabank.com'),
+  ADMIN_EMAIL: z.string().email().optional().default('support@avenorabank.com'),
+  CONTACT_EMAIL: z.string().email().optional().default('support@avenorabank.com'),
 });
 
 export type ValidatedEnv = z.infer<typeof EnvSchema>;
@@ -114,5 +124,10 @@ export function getSafePublicConfig(config: ValidatedEnv) {
     logLevel: config.LOG_LEVEL,
     maskPiiEnabled: config.MASK_PII_IN_LOGS,
     databaseConfigured: Boolean(config.DATABASE_URL && !config.DATABASE_URL.includes('placeholder')),
+    emailConfigured: Boolean(
+      config.RESEND_API_KEY &&
+        config.RESEND_API_KEY.trim() !== '' &&
+        !config.RESEND_API_KEY.includes('placeholder')
+    ),
   };
 }

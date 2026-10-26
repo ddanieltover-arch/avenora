@@ -12,9 +12,10 @@
 
 import { Money } from '../../domain/money/Money.ts';
 import { getCurrency, isSupportedCurrency } from '../../domain/money/Currency.ts';
-import { UserRole } from './auth.service.ts';
+import { UserRole, defaultAuthService } from './auth.service.ts';
 import { defaultWalletService } from './wallet.service.ts';
 import { defaultAuditService } from './audit.service.ts';
+import { defaultEmailService, voidEmail } from './email.service.ts';
 
 export type GrantProgramStatus = 'UNVERIFIED' | 'PENDING_REVIEW' | 'VERIFIED' | 'REJECTED' | 'EXPIRED';
 
@@ -381,6 +382,40 @@ export class GrantService {
       timestamp: new Date(),
     });
 
+    const customer = defaultAuthService.getUserById(userId);
+    const customerName = customer?.fullName || app.applicantName;
+    if (!allEligible) {
+      if (customer?.email) {
+        voidEmail(
+          'grant-ineligible',
+          defaultEmailService.sendGrantIneligibleEmail({
+            to: customer.email,
+            fullName: customerName,
+            applicationId: app.id,
+            reason: 'Application failed one or more mandatory eligibility requirements.',
+          }),
+        );
+      }
+    } else {
+      if (customer?.email) {
+        voidEmail(
+          'grant-submitted',
+          defaultEmailService.sendGrantSubmittedEmail({
+            to: customer.email,
+            fullName: customerName,
+            applicationId: app.id,
+          }),
+        );
+      }
+      voidEmail(
+        'grant-submitted-staff',
+        defaultEmailService.sendGrantSubmittedStaffEmail({
+          customerName,
+          applicationId: app.id,
+        }),
+      );
+    }
+
     return app;
   }
 
@@ -440,6 +475,20 @@ export class GrantService {
         currency: app.currency,
       },
     });
+
+    const customer = defaultAuthService.getUserById(app.userId);
+    if (customer?.email) {
+      voidEmail(
+        'grant-reviewed',
+        defaultEmailService.sendGrantReviewedEmail({
+          to: customer.email,
+          fullName: customer.fullName || app.applicantName,
+          applicationId: app.id,
+          decision: params.decision,
+          notes: params.notes,
+        }),
+      );
+    }
 
     return app;
   }
@@ -525,6 +574,20 @@ export class GrantService {
         reconciliationRef: reconRef,
       },
     });
+
+    const customer = defaultAuthService.getUserById(app.userId);
+    if (customer?.email) {
+      voidEmail(
+        'grant-disbursed',
+        defaultEmailService.sendGrantDisbursedEmail({
+          to: customer.email,
+          fullName: customer.fullName || app.applicantName,
+          applicationId: app.id,
+          amount: awardAmountMoney.toDecimalString(),
+          currency: award.currency,
+        }),
+      );
+    }
 
     return {
       application: app,

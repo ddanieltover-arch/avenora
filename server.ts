@@ -5,10 +5,16 @@
  * Runs Express on port 3000 with Vite middleware mounted in development.
  */
 
-import path from 'path';
+import 'dotenv/config';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createExpressApp } from './src/server/app.ts';
 import { createServer as createViteServer } from 'vite';
+import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
+
+const rootDir = path.dirname(fileURLToPath(import.meta.url));
 
 async function bootstrap() {
   const app = createExpressApp();
@@ -16,9 +22,23 @@ async function bootstrap() {
   const isProduction = process.env.NODE_ENV === 'production';
 
   if (!isProduction) {
+    // Inline Vite config: Vite 8.3 + rolldown currently fails bundling vite.config.*
+    // with sourcemapPathTransform ("object" vs "string") on this Windows install.
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      configFile: false,
+      root: rootDir,
       appType: 'spa',
+      plugins: [react(), tailwindcss()],
+      resolve: {
+        alias: {
+          '@': path.resolve(rootDir, 'src'),
+        },
+      },
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR !== 'true',
+        ...(process.env.DISABLE_HMR === 'true' ? { watch: null } : {}),
+      },
     });
     app.use(vite.middlewares);
   } else {

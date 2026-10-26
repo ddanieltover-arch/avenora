@@ -20,11 +20,14 @@ import {
   canTransitionProviderState,
   mapProviderStatusToLedgerStatus,
 } from '../../domain/ledger/ProviderOperationState.ts';
+import { Money } from '../../domain/money/Money.ts';
 import { defaultLedgerService } from './ledger.service.ts';
 import { LedgerAccount } from '../../domain/ledger/LedgerAccount.ts';
 import { defaultAuditService } from './audit.service.ts';
 import { getValidatedConfig } from '../../config/env.config.ts';
 import { IFiatPaymentProvider, defaultMockPaymentProvider } from './providerAdapters.ts';
+import { defaultAuthService } from './auth.service.ts';
+import { defaultEmailService, voidEmail } from './email.service.ts';
 
 export interface ProviderPaymentRecord {
   id: string;
@@ -55,6 +58,18 @@ export class ProviderPaymentService {
   private paymentsByIdempotencyKey = new Map<string, string>(); // idempotencyKey -> paymentId
 
   constructor(private paymentProvider: IFiatPaymentProvider = defaultMockPaymentProvider) {}
+
+  /** Resolve customer from debtor ledger wallet when the account is user-owned. */
+  private resolvePaymentCustomer(payment: ProviderPaymentRecord) {
+    const debtorAccount = defaultLedgerService.getAccount(payment.debtorWalletId);
+    const userId = debtorAccount?.userId;
+    if (!userId) return undefined;
+    return defaultAuthService.getUserById(userId);
+  }
+
+  private formatPaymentAmount(payment: ProviderPaymentRecord): string {
+    return Money.fromMinor(payment.amountMinor, payment.currency).toDecimalString();
+  }
 
   /**
    * Step 1: Initiates a payment request.
@@ -213,6 +228,13 @@ export class ProviderPaymentService {
         timestamp: new Date(),
         details: { externalReference: params.externalReference, correlationId: params.correlationId },
       });
+      voidEmail(
+        'reconciliation-required',
+        defaultEmailService.sendReconciliationRequiredEmail({
+          paymentId: payment.id,
+          detail: payment.reconciliationNotes,
+        }),
+      );
       return payment;
     }
 
@@ -272,6 +294,20 @@ export class ProviderPaymentService {
       },
     });
 
+    const customer = this.resolvePaymentCustomer(payment);
+    if (customer?.email) {
+      voidEmail(
+        'provider-payment-confirmed',
+        defaultEmailService.sendProviderPaymentConfirmedEmail({
+          to: customer.email,
+          fullName: customer.fullName,
+          amount: this.formatPaymentAmount(payment),
+          currency: payment.currency,
+          paymentId: payment.id,
+        }),
+      );
+    }
+
     return payment;
   }
 
@@ -302,6 +338,13 @@ export class ProviderPaymentService {
         timestamp: new Date(),
         details: { errorCode: params.errorCode, errorMessage: params.errorMessage, correlationId: params.correlationId },
       });
+      voidEmail(
+        'reconciliation-required',
+        defaultEmailService.sendReconciliationRequiredEmail({
+          paymentId: payment.id,
+          detail: payment.reconciliationNotes,
+        }),
+      );
       return payment;
     }
 
@@ -319,6 +362,21 @@ export class ProviderPaymentService {
       timestamp: new Date(),
       details: { errorCode: params.errorCode, errorMessage: params.errorMessage, correlationId: params.correlationId },
     });
+
+    const customer = this.resolvePaymentCustomer(payment);
+    if (customer?.email) {
+      voidEmail(
+        'provider-payment-failed',
+        defaultEmailService.sendProviderPaymentFailedEmail({
+          to: customer.email,
+          fullName: customer.fullName,
+          amount: this.formatPaymentAmount(payment),
+          currency: payment.currency,
+          paymentId: payment.id,
+          reason: `[${params.errorCode}] ${params.errorMessage}`,
+        }),
+      );
+    }
 
     return payment;
   }

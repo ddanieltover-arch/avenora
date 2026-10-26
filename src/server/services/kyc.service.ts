@@ -14,6 +14,7 @@ import { KycStatus, UserRole } from './auth.service.ts';
 import { defaultAuthService } from './auth.service.ts';
 import { defaultAuditService } from './audit.service.ts';
 import { defaultDomesticBankAccountService } from './domesticBankAccount.service.ts';
+import { defaultEmailService, voidEmail } from './email.service.ts';
 import {
   canonicalizeTaxIdType,
   countryHasIndividualTaxId,
@@ -252,6 +253,25 @@ export class KycService {
       user.kycStatus = 'SUBMITTED';
       user.updatedAt = new Date();
       defaultAuthService.syncCustomerActivationFromKyc(params.userId);
+
+      const customerName =
+        `${params.legalFirstName} ${params.legalLastName}`.trim() || user.fullName;
+      voidEmail(
+        'kyc-submitted',
+        defaultEmailService.sendKycSubmittedEmail({
+          to: user.email,
+          fullName: customerName,
+          reference: profile.id,
+        }),
+      );
+      voidEmail(
+        'kyc-submitted-staff',
+        defaultEmailService.sendKycSubmittedStaffEmail({
+          customerName,
+          customerEmail: user.email,
+          userId: user.id,
+        }),
+      );
     }
 
     return profile;
@@ -414,6 +434,46 @@ export class KycService {
             error: err instanceof Error ? err.message : String(err),
           },
         });
+      }
+    }
+
+    if (user) {
+      const fullName =
+        `${profile.legalFirstName ?? ''} ${profile.legalLastName ?? ''}`.trim() || user.fullName;
+      const notes = params.notes || params.rejectionReason;
+      switch (params.decision) {
+        case 'UNDER_REVIEW':
+          voidEmail(
+            'kyc-under-review',
+            defaultEmailService.sendKycUnderReviewEmail({ to: user.email, fullName }),
+          );
+          break;
+        case 'NEEDS_MORE_INFORMATION':
+          voidEmail(
+            'kyc-needs-more-info',
+            defaultEmailService.sendKycNeedsMoreInfoEmail({
+              to: user.email,
+              fullName,
+              notes,
+            }),
+          );
+          break;
+        case 'APPROVED':
+          voidEmail(
+            'kyc-approved',
+            defaultEmailService.sendKycApprovedEmail({ to: user.email, fullName }),
+          );
+          break;
+        case 'REJECTED':
+          voidEmail(
+            'kyc-rejected',
+            defaultEmailService.sendKycRejectedEmail({
+              to: user.email,
+              fullName,
+              notes,
+            }),
+          );
+          break;
       }
     }
 
