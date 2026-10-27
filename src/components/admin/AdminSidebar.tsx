@@ -1,6 +1,7 @@
 /**
  * @license Apache-2.0
  * Admin console sidebar navigation (desktop + mobile drawer).
+ * Visual language aligned with the customer portal sidebar.
  */
 
 import React from 'react';
@@ -53,38 +54,45 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
     onMobileClose();
   };
 
+  const navButtonClass = (selected: boolean) =>
+    `w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-[13px] font-semibold transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#19A77A]/50 focus-visible:ring-offset-2 focus-visible:ring-offset-white ${
+      selected
+        ? 'bg-gradient-to-r from-[#075B46] to-[#063D32] text-white shadow-sm'
+        : 'text-[#17231F] hover:bg-[#F1F4F1]'
+    }`;
+
   return (
     <>
       {mobileOpen ? (
         <button
           type="button"
-          className="fixed inset-0 bg-brand-dark/40 z-40 lg:hidden cursor-default"
+          className="fixed inset-0 bg-[#0a1210]/40 z-40 lg:hidden cursor-default"
           aria-label="Close navigation overlay"
           onClick={onMobileClose}
         />
       ) : null}
 
       <aside
-        className={`flex flex-col w-[248px] shrink-0 bg-brand-deep text-white z-50 transition-transform duration-200 ease-out motion-reduce:transition-none ${
+        className={`flex flex-col w-[260px] shrink-0 bg-[#FAFAF7] border-r border-[#E2E8E4] z-50 transition-transform duration-200 ease-out motion-reduce:transition-none ${
           mobileOpen
             ? 'fixed inset-y-0 left-0 shadow-2xl'
             : 'hidden lg:flex lg:sticky lg:top-0 lg:self-start lg:h-dvh lg:max-h-dvh'
         }`}
         aria-label="Admin navigation"
       >
-        <div className="px-4 pt-5 pb-4 border-b border-white/10">
-          <div className="flex items-center gap-2.5">
-            <AvenoraLogo size="sm" className="rounded-lg bg-white/95 p-0.5" />
+        <div className="px-5 pt-6 pb-4 border-b border-[#E2E8E4]/80">
+          <div className="flex items-center gap-3">
+            <AvenoraLogo size="sm" className="rounded-lg" />
             <div className="min-w-0">
-              <p className="font-serif font-bold text-sm tracking-tight leading-tight">Avenora</p>
-              <p className="text-[10px] text-emerald-300/90 font-medium uppercase tracking-wider">
-                Admin & Ops
+              <p className="font-serif font-bold text-[#075B46] text-base leading-tight tracking-tight">
+                Avenora
               </p>
+              <p className="text-[11px] text-[#68746E] truncate">Admin &amp; Ops</p>
             </div>
           </div>
         </div>
 
-        <nav className="flex-1 overflow-y-auto px-2.5 py-4 space-y-0.5" role="navigation">
+        <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1" role="navigation">
           {ADMIN_LIVE_TABS.map((item) => {
             const Icon = item.icon;
             const selected = activeTab === item.id;
@@ -94,20 +102,10 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
                 type="button"
                 onClick={() => handleNav(item.id)}
                 aria-current={selected ? 'page' : undefined}
-                className={`relative w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-semibold transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent/50 ${
-                  selected
-                    ? 'bg-white/12 text-white'
-                    : 'text-white/70 hover:bg-white/8 hover:text-white'
-                }`}
+                className={navButtonClass(selected)}
               >
-                {selected ? (
-                  <span
-                    className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-6 rounded-r bg-brand-accent"
-                    aria-hidden
-                  />
-                ) : null}
                 <Icon
-                  className={`w-[17px] h-[17px] shrink-0 ${selected ? 'text-brand-accent' : 'text-white/55'}`}
+                  className={`w-[18px] h-[18px] shrink-0 ${selected ? 'text-white' : 'text-[#68746E]'}`}
                   aria-hidden
                 />
                 <span className="truncate text-left">{item.label}</span>
@@ -116,19 +114,19 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
           })}
         </nav>
 
-        <div className="p-3 border-t border-white/10 space-y-1">
+        <div className="p-3 border-t border-[#E2E8E4] space-y-1">
           <button
             type="button"
             onClick={onBackToPortal}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[12px] font-medium text-white/70 hover:text-white hover:bg-white/8 cursor-pointer"
+            className="w-full flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-[12px] font-semibold text-[#17231F] hover:bg-[#F1F4F1] cursor-pointer"
           >
-            <ArrowLeft className="w-3.5 h-3.5" aria-hidden />
+            <ArrowLeft className="w-3.5 h-3.5 text-[#68746E]" aria-hidden />
             Customer portal
           </button>
           <button
             type="button"
             onClick={onBackToPublic}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[12px] font-medium text-white/50 hover:text-white hover:bg-white/8 cursor-pointer"
+            className="w-full flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-[12px] font-medium text-[#68746E] hover:text-[#17231F] hover:bg-[#F1F4F1] cursor-pointer"
           >
             Public site
           </button>
