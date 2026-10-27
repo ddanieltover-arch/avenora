@@ -5,7 +5,7 @@
  * Shell layout with sidebar navigation; tab panels live in sections/*.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../AuthContext.tsx';
 import {
   ShieldAlert,
@@ -22,6 +22,7 @@ import { AuthModal } from '../auth/AuthModal.tsx';
 import { AdminSidebar } from './AdminSidebar.tsx';
 import { AdminTopbar } from './AdminTopbar.tsx';
 import { AdminButtonNav } from './AdminButtonNav.tsx';
+import { AdminBottomNav } from './AdminBottomNav.tsx';
 import { AdminButton } from './ui/AdminButton.tsx';
 import {
   AdminOverviewSection,
@@ -53,6 +54,24 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
   const [loading, setLoading] = useState(false);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
+
+  /** Session/auth failures → sign out (no pink banner on a dead session). */
+  const showError = useCallback(
+    (message: string) => {
+      const detail = message.trim();
+      if (!detail) return;
+      if (
+        /session is invalid|expired|has been revoked|authentication required|unauthorized|invalid.session/i.test(
+          detail,
+        )
+      ) {
+        void logout();
+        return;
+      }
+      setErrorNotice(detail);
+    },
+    [logout],
+  );
 
   // Operations Overview Data
   const [overviewData, setOverviewData] = useState<any>(null);
@@ -143,11 +162,11 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
         const data = await res.json();
         setOverviewData(data);
       } else {
-        const err = await res.json();
-        setErrorNotice(err.detail || 'Failed to load operational overview');
+        const err = await res.json().catch(() => ({}));
+        showError(err.detail || err.title || 'Failed to load operational overview');
       }
     } catch (e: any) {
-      setErrorNotice(e.message);
+      showError(e.message || 'Failed to load operational overview');
     } finally {
       setLoading(false);
     }
@@ -246,7 +265,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       await fetchPendingDeposits();
       await fetchPendingWithdrawals();
     } catch (e: any) {
-      setErrorNotice(e.message);
+      showError(e.message || 'Request failed');
     } finally {
       setLoading(false);
     }
@@ -279,7 +298,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       fetchCustomers();
       fetchOverview();
     } catch (e: any) {
-      setErrorNotice(e.message);
+      showError(e.message || 'Request failed');
     } finally {
       setLoading(false);
     }
@@ -312,7 +331,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       fetchCustomers();
       fetchOverview();
     } catch (e: any) {
-      setErrorNotice(e.message);
+      showError(e.message || 'Request failed');
     } finally {
       setLoading(false);
     }
@@ -359,7 +378,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       fetchCustomers();
       fetchOverview();
     } catch (e: any) {
-      setErrorNotice(e.message);
+      showError(e.message || 'Request failed');
     } finally {
       setLoading(false);
     }
@@ -430,7 +449,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       fetchKycQueue();
       fetchOverview();
     } catch (e: any) {
-      setErrorNotice(e.message);
+      showError(e.message || 'Request failed');
     } finally {
       setLoading(false);
     }
@@ -468,7 +487,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
         setSuccessNotice('Deposit approved — funds released from hold to customer available balance.');
         await fetchPendingDeposits();
       } else {
-        setErrorNotice(data.detail || data.title || 'Could not approve deposit.');
+        showError(data.detail || data.title || 'Could not approve deposit.');
       }
     } finally {
       setLoading(false);
@@ -494,7 +513,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
         setDepositRejectReason('');
         await fetchPendingDeposits();
       } else {
-        setErrorNotice(data.detail || data.title || 'Could not reject deposit.');
+        showError(data.detail || data.title || 'Could not reject deposit.');
       }
     } finally {
       setLoading(false);
@@ -533,7 +552,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
         setSuccessNotice('Withdrawal approved — payout recorded and hold cleared.');
         await fetchPendingWithdrawals();
       } else {
-        setErrorNotice(data.detail || data.title || 'Could not approve withdrawal.');
+        showError(data.detail || data.title || 'Could not approve withdrawal.');
       }
     } finally {
       setLoading(false);
@@ -559,7 +578,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
         setWithdrawalRejectReason('');
         await fetchPendingWithdrawals();
       } else {
-        setErrorNotice(data.detail || data.title || 'Could not reject withdrawal.');
+        showError(data.detail || data.title || 'Could not reject withdrawal.');
       }
     } finally {
       setLoading(false);
@@ -631,7 +650,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       fetchTransactions();
       fetchOverview();
     } catch (e: any) {
-      setErrorNotice(e.message);
+      showError(e.message || 'Request failed');
     } finally {
       setLoading(false);
     }
@@ -690,7 +709,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       fetchLoansAndGrants();
       fetchOverview();
     } catch (e: any) {
-      setErrorNotice(e.message);
+      showError(e.message || 'Request failed');
     } finally {
       setLoading(false);
     }
@@ -722,7 +741,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       fetchLoansAndGrants();
       fetchOverview();
     } catch (e: any) {
-      setErrorNotice(e.message);
+      showError(e.message || 'Request failed');
     } finally {
       setLoading(false);
     }
@@ -750,7 +769,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       fetchLoansAndGrants();
       fetchOverview();
     } catch (e: any) {
-      setErrorNotice(e.message);
+      showError(e.message || 'Request failed');
     } finally {
       setLoading(false);
     }
@@ -826,7 +845,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
         /* overview refresh is best-effort */
       }
     } catch (e: any) {
-      setErrorNotice(e.message);
+      showError(e.message || 'Request failed');
     } finally {
       setLoading(false);
     }
@@ -867,7 +886,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       fetchCards();
       fetchOverview();
     } catch (e: any) {
-      setErrorNotice(e.message);
+      showError(e.message || 'Request failed');
     } finally {
       setLoading(false);
     }
@@ -1023,7 +1042,6 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
           onTabChange={onTabChange}
           mobileOpen={mobileNavOpen}
           onMobileClose={() => setMobileNavOpen(false)}
-          onBackToPortal={onBackToPortal}
           onBackToPublic={onBackToPublic}
         />
 
@@ -1037,10 +1055,12 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
             onOpenMobileNav={() => setMobileNavOpen(true)}
           />
 
-          <AdminButtonNav activeTab={activeTab} onTabChange={onTabChange} />
+          <div className="hidden lg:block">
+            <AdminButtonNav activeTab={activeTab} onTabChange={onTabChange} />
+          </div>
 
           <main className="app-scroll-pane flex-1">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-4">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-4 portal-mobile-main lg:!pb-6">
               {errorNotice && (
                 <div
                   role="alert"
@@ -1236,6 +1256,8 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
           </main>
         </div>
       </div>
+
+      <AdminBottomNav activeTab={activeTab} onTabChange={onTabChange} />
       <AuthModal />
     </div>
   );

@@ -13,7 +13,6 @@ import {
   CreditCard,
   History,
   Award,
-  ArrowLeft,
 } from 'lucide-react';
 import type { AdminTabId } from '../../routing/appRoutes.ts';
 import { AvenoraLogo } from '../branding/AvenoraLogo.tsx';
@@ -37,7 +36,6 @@ interface AdminSidebarProps {
   onTabChange: (tab: AdminTabId) => void;
   mobileOpen: boolean;
   onMobileClose: () => void;
-  onBackToPortal: () => void;
   onBackToPublic: () => void;
 }
 
@@ -46,7 +44,6 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
   onTabChange,
   mobileOpen,
   onMobileClose,
-  onBackToPortal,
   onBackToPublic,
 }) => {
   const handleNav = (tab: AdminTabId) => {
@@ -114,15 +111,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
           })}
         </nav>
 
-        <div className="p-3 border-t border-[#E2E8E4] space-y-1">
-          <button
-            type="button"
-            onClick={onBackToPortal}
-            className="w-full flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-[12px] font-semibold text-[#17231F] hover:bg-[#F1F4F1] cursor-pointer"
-          >
-            <ArrowLeft className="w-3.5 h-3.5 text-[#68746E]" aria-hidden />
-            Customer portal
-          </button>
+        <div className="p-3 border-t border-[#E2E8E4]">
           <button
             type="button"
             onClick={onBackToPublic}
