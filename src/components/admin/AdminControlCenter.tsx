@@ -985,6 +985,21 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
               </p>
             </div>
 
+            {!user && (
+              <div className="rounded-xl border border-brand-border bg-white px-4 py-3 text-left text-xs text-brand-muted space-y-1.5">
+                <p className="font-semibold text-brand-deep">Prototype admin credentials</p>
+                <p>
+                  Email: <code className="text-brand-primary">support@avenorabank.com</code>
+                </p>
+                <p>
+                  Password: <code className="text-brand-primary">AvenoraPassword2026!</code>
+                </p>
+                <p>
+                  MFA code: <code className="text-brand-primary">123456</code>
+                </p>
+              </div>
+            )}
+
             <div className="flex flex-col sm:flex-row items-center justify-center gap-2">
               {!user ? (
                 <AdminButton onClick={() => openAuthModal('login')}>
