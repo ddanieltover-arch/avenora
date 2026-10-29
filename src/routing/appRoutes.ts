@@ -154,7 +154,8 @@ export const ADMIN_TAB_SLUG: Record<AdminTabId, string> = {
 export type AppRoute =
   | { area: 'public'; view: PublicViewId }
   | { area: 'portal'; tab: PortalTabId }
-  | { area: 'admin'; tab: AdminTabId };
+  | { area: 'admin'; tab: AdminTabId }
+  | { area: 'admin-login' };
 
 const PUBLIC_SLUG_TO_VIEW = Object.fromEntries(
   Object.entries(PUBLIC_VIEW_SLUG).map(([view, slug]) => [slug || '__home__', view]),
@@ -197,6 +198,10 @@ export function buildAdminPath(tab: AdminTabId): string {
   return slug ? `/admin/${slug}` : '/admin';
 }
 
+export function buildAdminLoginPath(): string {
+  return '/admin/login';
+}
+
 export function parseAppPath(pathname: string): AppRoute {
   const segments = splitSegments(pathname);
 
@@ -211,6 +216,9 @@ export function parseAppPath(pathname: string): AppRoute {
   }
 
   if (segments[0] === 'admin') {
+    if (segments[1] === 'login') {
+      return { area: 'admin-login' };
+    }
     const slugKey = segments[1] ?? '__overview__';
     const tab = ADMIN_SLUG_TO_TAB[slugKey] ?? 'overview';
     return { area: 'admin', tab };
@@ -237,6 +245,8 @@ export function pathForRoute(route: AppRoute): string {
       return buildPortalPath(route.tab);
     case 'admin':
       return buildAdminPath(route.tab);
+    case 'admin-login':
+      return buildAdminLoginPath();
     default:
       return '/';
   }

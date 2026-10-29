@@ -9,14 +9,13 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../AuthContext.tsx';
 import {
   ShieldAlert,
-  Shield,
   Lock,
   ArrowLeft,
   RefreshCw,
   CheckCircle2,
   XCircle,
 } from 'lucide-react';
-import { buildPublicPath, navigateToPath, type AdminTabId } from '../../routing/appRoutes.ts';
+import { buildAdminLoginPath, navigateToPath, type AdminTabId } from '../../routing/appRoutes.ts';
 import { AvenoraLogo } from '../branding/AvenoraLogo.tsx';
 import { AdminSidebar } from './AdminSidebar.tsx';
 import { AdminTopbar } from './AdminTopbar.tsx';
@@ -950,6 +949,14 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
     if (activeTab === 'audit') fetchAuditLogs();
   };
 
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user || !token) {
+      navigateToPath(buildAdminLoginPath(), { replace: true });
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }
+  }, [authLoading, user, token]);
+
   if (authLoading && !user) {
     return (
       <div className="app-viewport-shell bg-brand-warm text-brand-dark font-sans flex items-center justify-center">
@@ -961,21 +968,27 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
     );
   }
 
-  if (!user || !token || !isStaff) {
+  if (!user || !token) {
+    return (
+      <div className="app-viewport-shell bg-brand-warm text-brand-dark font-sans flex items-center justify-center">
+        <div className="flex items-center gap-3 text-sm text-brand-muted">
+          <RefreshCw className="w-4 h-4 animate-spin text-brand-primary" />
+          Redirecting to staff sign in…
+        </div>
+      </div>
+    );
+  }
+
+  if (!isStaff) {
     return (
       <div className="app-viewport-shell bg-brand-warm text-brand-dark font-sans">
         <header className="shrink-0 bg-brand-deep border-b border-brand-primary text-white">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <AvenoraLogo size="sm" className="rounded-lg bg-white/95 p-0.5 shadow-sm" />
-              <div>
-                <span className="font-serif font-bold text-base tracking-tight text-white block">
-                  AVENORA ADMIN & OPS
-                </span>
-                <span className="text-[10px] text-emerald-300 font-medium leading-none">
-                  STAFF SIGN-IN REQUIRED
-                </span>
-              </div>
+              <span className="font-serif font-bold text-sm tracking-tight text-white">
+                AVENORA ADMIN & OPS
+              </span>
             </div>
             <button
               type="button"
@@ -994,30 +1007,14 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
               <Lock className="w-5 h-5" />
             </div>
             <div className="space-y-2">
-              <h1 className="font-serif text-2xl font-bold text-brand-deep">
-                {user ? 'Staff access required' : 'Sign in to continue'}
-              </h1>
+              <h1 className="font-serif text-2xl font-bold text-brand-deep">Staff access required</h1>
               <p className="text-sm text-brand-muted leading-relaxed">
-                {user
-                  ? `Your account (${user.email}) is signed in as ${user.role}. Admin & Ops is limited to SUPPORT, COMPLIANCE_REVIEWER, ADMIN, and SUPER_ADMIN.`
-                  : 'The control center is locked until a staff session is authenticated. Sign in with the support admin account.'}
+                Your account ({user.email}) is signed in as {user.role}. Admin & Ops is limited to
+                SUPPORT, COMPLIANCE_REVIEWER, ADMIN, and SUPER_ADMIN.
               </p>
             </div>
-
             <div className="flex flex-col sm:flex-row items-center justify-center gap-2">
-              {!user ? (
-                <AdminButton
-                  onClick={() => {
-                    navigateToPath(buildPublicPath('login'));
-                    window.dispatchEvent(new PopStateEvent('popstate'));
-                  }}
-                >
-                  <Shield className="w-4 h-4" />
-                  Staff sign in
-                </AdminButton>
-              ) : (
-                <AdminButton onClick={() => logout()}>Sign out and switch account</AdminButton>
-              )}
+              <AdminButton onClick={() => logout()}>Sign out and switch account</AdminButton>
               <AdminButton variant="secondary" onClick={onBackToPortal}>
                 Customer portal
               </AdminButton>

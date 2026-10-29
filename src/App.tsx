@@ -9,6 +9,7 @@ import { AuthProvider } from './components/AuthContext.tsx';
 import { PublicWebsite } from './components/public/PublicWebsite.tsx';
 import { CustomerPortal } from './components/CustomerPortal.tsx';
 import { AdminControlCenter } from './components/admin/AdminControlCenter.tsx';
+import { AdminLoginPage } from './components/auth/AdminLoginPage.tsx';
 import { useAppRoute } from './routing/useAppRoute.ts';
 
 function MainApp() {
@@ -24,6 +25,10 @@ function MainApp() {
   const handleBackToPublic = () => {
     goToPath('/');
   };
+
+  if (route.area === 'admin-login') {
+    return <AdminLoginPage />;
+  }
 
   if (route.area === 'admin') {
     return (

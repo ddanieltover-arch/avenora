@@ -35,9 +35,10 @@ async function readApiJson(res: Response): Promise<any> {
   }
 }
 
-/** Send the user to the customer dashboard (or admin overview for staff on /admin). */
+/** Send the user to the customer dashboard (or admin overview for staff on /admin*). */
 function redirectToDashboard(role?: AuthUser['role']): void {
-  const onAdminPath = window.location.pathname.startsWith('/admin');
+  const path = window.location.pathname;
+  const onAdminPath = path === '/admin' || path.startsWith('/admin/');
   const destination =
     onAdminPath && role && STAFF_ROLES.has(role)
       ? buildAdminPath('overview')
