@@ -16,9 +16,8 @@ import {
   CheckCircle2,
   XCircle,
 } from 'lucide-react';
-import type { AdminTabId } from '../../routing/appRoutes.ts';
+import { buildPublicPath, navigateToPath, type AdminTabId } from '../../routing/appRoutes.ts';
 import { AvenoraLogo } from '../branding/AvenoraLogo.tsx';
-import { AuthModal } from '../auth/AuthModal.tsx';
 import { AdminSidebar } from './AdminSidebar.tsx';
 import { AdminTopbar } from './AdminTopbar.tsx';
 import { AdminButtonNav } from './AdminButtonNav.tsx';
@@ -49,7 +48,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
   onBackToPortal,
   onBackToPublic,
 }) => {
-  const { user, token, logout, loading: authLoading, openAuthModal, authModalOpen } = useAuth();
+  const { user, token, logout, loading: authLoading } = useAuth();
   const isStaff = Boolean(user?.role && STAFF_ROLES.has(user.role));
   const [loading, setLoading] = useState(false);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
@@ -951,7 +950,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
     if (activeTab === 'audit') fetchAuditLogs();
   };
 
-  if (authLoading && !user && !authModalOpen) {
+  if (authLoading && !user) {
     return (
       <div className="app-viewport-shell bg-brand-warm text-brand-dark font-sans flex items-center justify-center">
         <div className="flex items-center gap-3 text-sm text-brand-muted">
@@ -1007,7 +1006,12 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-2">
               {!user ? (
-                <AdminButton onClick={() => openAuthModal('login')}>
+                <AdminButton
+                  onClick={() => {
+                    navigateToPath(buildPublicPath('login'));
+                    window.dispatchEvent(new PopStateEvent('popstate'));
+                  }}
+                >
                   <Shield className="w-4 h-4" />
                   Staff sign in
                 </AdminButton>
@@ -1020,7 +1024,6 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
             </div>
           </div>
         </main>
-        <AuthModal />
       </div>
     );
   }
@@ -1258,7 +1261,6 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       </div>
 
       <AdminBottomNav activeTab={activeTab} onTabChange={onTabChange} />
-      <AuthModal />
     </div>
   );
 };

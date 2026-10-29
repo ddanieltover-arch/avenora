@@ -29,7 +29,7 @@ interface NavbarProps {
 
 export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate, onOpenPortal, onOpenAdmin }) => {
   const { locale, setLocale, t } = useLocalization();
-  const { user, logout, openAuthModal, openAccountOpeningFlow } = useAuth();
+  const { user, logout } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const navRef = useRef<HTMLDivElement>(null);
@@ -56,7 +56,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate, onOpenP
       onOpenPortal();
       return;
     }
-    openAuthModal('login');
+    navigate('login');
   };
 
   const publicHref = (view: string) =>
@@ -165,24 +165,30 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate, onOpenP
           <div className="hidden lg:flex items-center gap-2 shrink-0">
             {!user && (
               <>
-                <button
-                  type="button"
-                  onClick={() => openAuthModal('login')}
+                <a
+                  href={buildPublicPath('login')}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    navigate('login');
+                  }}
                   className="px-3 py-2 text-sm font-semibold text-[#003933] hover:bg-slate-100 rounded-lg transition"
                 >
                   {t.nav.signIn}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => openAccountOpeningFlow()}
+                </a>
+                <a
+                  href={buildPublicPath('register')}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    navigate('register');
+                  }}
                   className="px-3 py-2 text-sm font-semibold text-[#003933] bg-[#C6A568] hover:bg-[#b89558] rounded-lg transition shadow-xs"
                 >
                   {t.nav.openAccount}
-                </button>
+                </a>
               </>
             )}
             <a
-              href={user ? buildPortalPath('overview') : '/'}
+              href={user ? buildPortalPath('overview') : buildPublicPath('login')}
               onClick={(event) => {
                 event.preventDefault();
                 openOnlineBanking();
@@ -319,26 +325,26 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate, onOpenP
               </button>
             ) : (
               <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    openAuthModal('login');
-                    setMobileMenuOpen(false);
+                <a
+                  href={buildPublicPath('login')}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    navigate('login');
                   }}
-                  className="py-2.5 rounded-lg border border-slate-300 text-sm font-semibold text-[#003933]"
+                  className="py-2.5 rounded-lg border border-slate-300 text-sm font-semibold text-[#003933] text-center"
                 >
                   {t.nav.signIn}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    openAccountOpeningFlow();
-                    setMobileMenuOpen(false);
+                </a>
+                <a
+                  href={buildPublicPath('register')}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    navigate('register');
                   }}
-                  className="py-2.5 rounded-lg bg-[#C6A568] text-sm font-semibold text-[#003933]"
+                  className="py-2.5 rounded-lg bg-[#C6A568] text-sm font-semibold text-[#003933] text-center"
                 >
                   {t.nav.openAccount}
-                </button>
+                </a>
               </div>
             )}
           </div>

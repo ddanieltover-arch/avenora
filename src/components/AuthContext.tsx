@@ -9,7 +9,6 @@ import React, {
   useState,
   useEffect,
   useCallback,
-  useRef,
   ReactNode,
 } from 'react';
 import { buildAdminPath, buildPortalPath, navigateToPath } from '../routing/appRoutes.ts';
@@ -66,14 +65,6 @@ interface AuthContextType {
   loading: boolean;
   /** False until post-login PIN unlock (true immediately after registration). */
   transactionPinUnlocked: boolean;
-  authModalOpen: boolean;
-  authModalTab: 'login' | 'register' | 'forgot' | 'reset';
-  accountOpeningWelcomeOpen: boolean;
-  openAuthModal: (tab?: 'login' | 'register' | 'forgot' | 'reset') => void;
-  openAccountOpeningFlow: () => void;
-  closeAuthModal: () => void;
-  dismissAccountOpeningWelcome: () => void;
-  proceedToRegistrationFromWelcome: () => void;
   login: (email: string, password: string, totpCode?: string) => Promise<{ requiresMfa: boolean }>;
   logout: () => Promise<void>;
   register: (
@@ -110,63 +101,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [transactionPinUnlocked, setTransactionPinUnlocked] = useState(false);
-  const [authModalOpen, setAuthModalOpen] = useState(false);
-  const [authModalTab, setAuthModalTab] = useState<'login' | 'register' | 'forgot' | 'reset'>('login');
-  const [accountOpeningWelcomeOpen, setAccountOpeningWelcomeOpen] = useState(false);
-  const welcomeHistoryPushedRef = useRef(false);
-  const accountOpeningFlowLockRef = useRef(false);
-
-  const openAuthModal = (tab: 'login' | 'register' | 'forgot' | 'reset' = 'login') => {
-    setAuthModalTab(tab);
-    setAuthModalOpen(true);
-  };
-
-  const openAccountOpeningFlow = useCallback(() => {
-    if (accountOpeningWelcomeOpen || accountOpeningFlowLockRef.current) return;
-    accountOpeningFlowLockRef.current = true;
-    setAuthModalOpen(false);
-    setAccountOpeningWelcomeOpen(true);
-    if (!welcomeHistoryPushedRef.current) {
-      window.history.pushState({ avenoraAccountWelcome: true }, '');
-      welcomeHistoryPushedRef.current = true;
-    }
-    window.setTimeout(() => {
-      accountOpeningFlowLockRef.current = false;
-    }, 300);
-  }, [accountOpeningWelcomeOpen]);
-
-  const dismissAccountOpeningWelcome = useCallback(() => {
-    setAccountOpeningWelcomeOpen(false);
-    if (welcomeHistoryPushedRef.current) {
-      welcomeHistoryPushedRef.current = false;
-      window.history.back();
-    }
-  }, []);
-
-  const proceedToRegistrationFromWelcome = useCallback(() => {
-    setAccountOpeningWelcomeOpen(false);
-    if (welcomeHistoryPushedRef.current) {
-      welcomeHistoryPushedRef.current = false;
-      window.history.replaceState({}, '', window.location.pathname);
-    }
-    setAuthModalTab('register');
-    setAuthModalOpen(true);
-  }, []);
-
-  const closeAuthModal = () => {
-    setAuthModalOpen(false);
-  };
-
-  useEffect(() => {
-    const onPopState = () => {
-      if (accountOpeningWelcomeOpen) {
-        welcomeHistoryPushedRef.current = false;
-        setAccountOpeningWelcomeOpen(false);
-      }
-    };
-    window.addEventListener('popstate', onPopState);
-    return () => window.removeEventListener('popstate', onPopState);
-  }, [accountOpeningWelcomeOpen]);
 
   useEffect(() => {
     const restoreSession = async () => {
@@ -222,7 +156,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setToken(data.sessionToken);
       persistSessionToken(data.sessionToken);
       setTransactionPinUnlocked(data.transactionPinUnlocked === true);
-      setAuthModalOpen(false);
       redirectToDashboard(data.user?.role);
       return { requiresMfa: false };
     } finally {
@@ -281,7 +214,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setToken(data.sessionToken);
       persistSessionToken(data.sessionToken);
       setTransactionPinUnlocked(data.transactionPinUnlocked !== false);
-      setAuthModalOpen(false);
       redirectToDashboard(data.user?.role);
     } finally {
       setLoading(false);
@@ -392,14 +324,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         token,
         loading,
         transactionPinUnlocked,
-        authModalOpen,
-        authModalTab,
-        accountOpeningWelcomeOpen,
-        openAuthModal,
-        openAccountOpeningFlow,
-        closeAuthModal,
-        dismissAccountOpeningWelcome,
-        proceedToRegistrationFromWelcome,
         login,
         logout,
         register,

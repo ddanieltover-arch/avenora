@@ -19,8 +19,8 @@ import { SecurityCenterPage } from './SecurityCenterPage.tsx';
 import { PrivacyPolicyPage } from './PrivacyPolicyPage.tsx';
 import { TermsPage } from './TermsPage.tsx';
 import { CookiePreferencesModal } from './CookiePreferencesModal.tsx';
-import { AuthModal } from '../auth/AuthModal.tsx';
-import { AccountOpeningWelcome } from '../auth/AccountOpeningWelcome.tsx';
+import { LoginPage } from '../auth/LoginPage.tsx';
+import { RegisterPage } from '../auth/RegisterPage.tsx';
 import { PublicFooter } from './PublicFooter.tsx';
 import {
   Wallet,
@@ -485,30 +485,32 @@ export const PublicWebsite: React.FC<PublicWebsiteProps> = ({
         {currentView === 'terms' && (
           <TermsPage onOpenPortal={() => onOpenPortal('overview')} />
         )}
+
+        {currentView === 'login' && <LoginPage onNavigate={onNavigate} />}
+
+        {currentView === 'register' && <RegisterPage onNavigate={onNavigate} />}
       </main>
 
-      {/* Footer */}
-      <PublicFooter
-        onNavigate={(view) => {
-          if (view === 'cookies') {
-            setIsCookieModalOpen(true);
-          } else {
-            onNavigate(view);
-          }
-        }}
-        onOpenPortal={() => onOpenPortal('overview')}
-        onOpenCookies={() => setIsCookieModalOpen(true)}
-      />
+      {/* Footer — omit on auth pages for a focused layout */}
+      {currentView !== 'login' && currentView !== 'register' && (
+        <PublicFooter
+          onNavigate={(view) => {
+            if (view === 'cookies') {
+              setIsCookieModalOpen(true);
+            } else {
+              onNavigate(view);
+            }
+          }}
+          onOpenPortal={() => onOpenPortal('overview')}
+          onOpenCookies={() => setIsCookieModalOpen(true)}
+        />
+      )}
 
       {/* Cookie Consent Modal */}
       <CookiePreferencesModal
         isOpen={isCookieModalOpen}
         onClose={() => setIsCookieModalOpen(false)}
       />
-
-      <AccountOpeningWelcome />
-      {/* Unified Authentication & Onboarding Modal */}
-      <AuthModal />
     </div>
   );
 };

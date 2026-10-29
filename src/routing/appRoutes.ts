@@ -17,7 +17,9 @@ export type PublicViewId =
   | 'security'
   | 'help'
   | 'privacy'
-  | 'terms';
+  | 'terms'
+  | 'login'
+  | 'register';
 
 export const PUBLIC_VIEWS: PublicViewId[] = [
   'home',
@@ -34,6 +36,8 @@ export const PUBLIC_VIEWS: PublicViewId[] = [
   'help',
   'privacy',
   'terms',
+  'login',
+  'register',
 ];
 
 /** URL segment under site root (empty string = home `/`). */
@@ -52,6 +56,8 @@ export const PUBLIC_VIEW_SLUG: Record<PublicViewId, string> = {
   help: 'help',
   privacy: 'privacy',
   terms: 'terms',
+  login: 'login',
+  register: 'register',
 };
 
 export type PortalTabId =
