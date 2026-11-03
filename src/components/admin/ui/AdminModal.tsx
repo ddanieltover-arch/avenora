@@ -36,16 +36,23 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
+  // Only run autofocus / Escape wiring when `open` flips — not when inline onClose identities change.
   useEffect(() => {
     if (!open) return;
     previouslyFocused.current = document.activeElement as HTMLElement | null;
     const t = window.setTimeout(() => {
-      panelRef.current?.querySelector<HTMLElement>('button, [href], input, select, textarea')?.focus();
+      const panel = panelRef.current;
+      if (!panel) return;
+      const preferred = panel.querySelector<HTMLElement>('input, textarea, select');
+      const fallback = panel.querySelector<HTMLElement>('button, [href], input, select, textarea');
+      (preferred || fallback)?.focus();
     }, 0);
 
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') onCloseRef.current();
     };
     document.addEventListener('keydown', onKey);
     return () => {
@@ -53,7 +60,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
       document.removeEventListener('keydown', onKey);
       previouslyFocused.current?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
