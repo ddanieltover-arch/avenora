@@ -624,8 +624,9 @@ adminRouter.get(
   '/deposits/pending',
   authenticate,
   requireRoles(['SUPPORT', 'COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN']),
-  (req: Request, res: Response, next: NextFunction): void => {
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      await defaultWalletService.ensurePendingQueuesReady();
       const deposits = defaultWalletService.getPendingDepositsForAdmin({ actorRole: req.user!.role });
       const enriched = deposits.map((d) => {
         const customer = defaultAuthService.getUserById(d.userId);
@@ -713,8 +714,9 @@ adminRouter.get(
   '/withdrawals/pending',
   authenticate,
   requireRoles(['SUPPORT', 'COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN']),
-  (req: Request, res: Response, next: NextFunction): void => {
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      await defaultWalletService.ensurePendingQueuesReady();
       const withdrawals = defaultWalletService.getPendingWithdrawalsForAdmin({ actorRole: req.user!.role });
       const enriched = withdrawals.map((w) => {
         const customer = defaultAuthService.getUserById(w.userId);
@@ -804,8 +806,9 @@ adminRouter.get(
   '/transactions',
   authenticate,
   requireRoles(['SUPPORT', 'COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN']),
-  (req: Request, res: Response, next: NextFunction): void => {
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      await defaultWalletService.ensurePendingQueuesReady();
       const { search, status, currency, type, idempotencyKey, startDate, endDate, limit, offset } = req.query;
 
       const result = defaultWalletService.getAllTransactionsForAdmin({

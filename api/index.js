@@ -10589,6 +10589,11 @@ var WalletService = class {
   whenReady() {
     return this.readyPromise;
   }
+  /** Wait for bootstrap, then re-sync approval queues from ledger holds. */
+  async ensurePendingQueuesReady() {
+    await this.readyPromise;
+    await this.rebuildPendingQueuesFromLedger();
+  }
   async bootstrap() {
     await defaultLedgerService.whenReady();
     await defaultAuthService.whenReady();
@@ -11554,12 +11559,23 @@ var WalletService = class {
     const status = params.status ?? "PENDING_REVIEW";
     return this.pendingDeposits.filter((d) => d.status === status).sort((a, b) => b.submittedAt.getTime() - a.submittedAt.getTime());
   }
+  findPendingDeposit(depositIdOrRef) {
+    return this.pendingDeposits.find(
+      (d) => d.id === depositIdOrRef || d.referenceNumber === depositIdOrRef
+    );
+  }
+  findPendingWithdrawal(withdrawalIdOrRef) {
+    return this.pendingWithdrawals.find(
+      (w) => w.id === withdrawalIdOrRef || w.referenceNumber === withdrawalIdOrRef
+    );
+  }
   async approvePendingDeposit(params) {
     const allowed = ["SUPPORT", "COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"];
     if (!allowed.includes(params.actorRole)) {
       throw new Error("Access denied: Staff role required.");
     }
-    const record = this.pendingDeposits.find((d) => d.id === params.depositId);
+    await this.ensurePendingQueuesReady();
+    const record = this.findPendingDeposit(params.depositId);
     if (!record) {
       throw new Error("Pending deposit not found.");
     }
@@ -11661,7 +11677,8 @@ var WalletService = class {
     if (!params.reason.trim()) {
       throw new Error("Rejection reason is required.");
     }
-    const record = this.pendingDeposits.find((d) => d.id === params.depositId);
+    await this.ensurePendingQueuesReady();
+    const record = this.findPendingDeposit(params.depositId);
     if (!record) {
       throw new Error("Pending deposit not found.");
     }
@@ -11884,7 +11901,8 @@ var WalletService = class {
     if (!allowed.includes(params.actorRole)) {
       throw new Error("Access denied: Staff role required.");
     }
-    const record = this.pendingWithdrawals.find((w) => w.id === params.withdrawalId);
+    await this.ensurePendingQueuesReady();
+    const record = this.findPendingWithdrawal(params.withdrawalId);
     if (!record) {
       throw new Error("Pending withdrawal not found.");
     }
@@ -11988,7 +12006,8 @@ var WalletService = class {
     if (!params.reason.trim()) {
       throw new Error("Rejection reason is required.");
     }
-    const record = this.pendingWithdrawals.find((w) => w.id === params.withdrawalId);
+    await this.ensurePendingQueuesReady();
+    const record = this.findPendingWithdrawal(params.withdrawalId);
     if (!record) {
       throw new Error("Pending withdrawal not found.");
     }
@@ -16551,8 +16570,9 @@ adminRouter.get(
   "/deposits/pending",
   authenticate,
   requireRoles(["SUPPORT", "COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"]),
-  (req, res, next) => {
+  async (req, res, next) => {
     try {
+      await defaultWalletService.ensurePendingQueuesReady();
       const deposits = defaultWalletService.getPendingDepositsForAdmin({ actorRole: req.user.role });
       const enriched = deposits.map((d) => {
         const customer = defaultAuthService.getUserById(d.userId);
@@ -16632,8 +16652,9 @@ adminRouter.get(
   "/withdrawals/pending",
   authenticate,
   requireRoles(["SUPPORT", "COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"]),
-  (req, res, next) => {
+  async (req, res, next) => {
     try {
+      await defaultWalletService.ensurePendingQueuesReady();
       const withdrawals = defaultWalletService.getPendingWithdrawalsForAdmin({ actorRole: req.user.role });
       const enriched = withdrawals.map((w) => {
         const customer = defaultAuthService.getUserById(w.userId);
@@ -16713,8 +16734,9 @@ adminRouter.get(
   "/transactions",
   authenticate,
   requireRoles(["SUPPORT", "COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"]),
-  (req, res, next) => {
+  async (req, res, next) => {
     try {
+      await defaultWalletService.ensurePendingQueuesReady();
       const { search, status, currency, type, idempotencyKey, startDate, endDate, limit, offset } = req.query;
       const result = defaultWalletService.getAllTransactionsForAdmin({
         actorRole: req.user.role,

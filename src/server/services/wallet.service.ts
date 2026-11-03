@@ -204,6 +204,12 @@ export class WalletService {
     return this.readyPromise;
   }
 
+  /** Wait for bootstrap, then re-sync approval queues from ledger holds. */
+  public async ensurePendingQueuesReady(): Promise<void> {
+    await this.readyPromise;
+    await this.rebuildPendingQueuesFromLedger();
+  }
+
   private async bootstrap(): Promise<void> {
     await defaultLedgerService.whenReady();
     await defaultAuthService.whenReady();
@@ -1387,6 +1393,18 @@ export class WalletService {
       .sort((a, b) => b.submittedAt.getTime() - a.submittedAt.getTime());
   }
 
+  private findPendingDeposit(depositIdOrRef: string): PendingDepositRecord | undefined {
+    return this.pendingDeposits.find(
+      (d) => d.id === depositIdOrRef || d.referenceNumber === depositIdOrRef,
+    );
+  }
+
+  private findPendingWithdrawal(withdrawalIdOrRef: string): PendingWithdrawalRecord | undefined {
+    return this.pendingWithdrawals.find(
+      (w) => w.id === withdrawalIdOrRef || w.referenceNumber === withdrawalIdOrRef,
+    );
+  }
+
   public async approvePendingDeposit(params: {
     depositId: string;
     actorUserId: string;
@@ -1398,7 +1416,8 @@ export class WalletService {
       throw new Error('Access denied: Staff role required.');
     }
 
-    const record = this.pendingDeposits.find((d) => d.id === params.depositId);
+    await this.ensurePendingQueuesReady();
+    const record = this.findPendingDeposit(params.depositId);
     if (!record) {
       throw new Error('Pending deposit not found.');
     }
@@ -1518,7 +1537,8 @@ export class WalletService {
       throw new Error('Rejection reason is required.');
     }
 
-    const record = this.pendingDeposits.find((d) => d.id === params.depositId);
+    await this.ensurePendingQueuesReady();
+    const record = this.findPendingDeposit(params.depositId);
     if (!record) {
       throw new Error('Pending deposit not found.');
     }
@@ -1783,7 +1803,8 @@ export class WalletService {
       throw new Error('Access denied: Staff role required.');
     }
 
-    const record = this.pendingWithdrawals.find((w) => w.id === params.withdrawalId);
+    await this.ensurePendingQueuesReady();
+    const record = this.findPendingWithdrawal(params.withdrawalId);
     if (!record) {
       throw new Error('Pending withdrawal not found.');
     }
@@ -1907,7 +1928,8 @@ export class WalletService {
       throw new Error('Rejection reason is required.');
     }
 
-    const record = this.pendingWithdrawals.find((w) => w.id === params.withdrawalId);
+    await this.ensurePendingQueuesReady();
+    const record = this.findPendingWithdrawal(params.withdrawalId);
     if (!record) {
       throw new Error('Pending withdrawal not found.');
     }

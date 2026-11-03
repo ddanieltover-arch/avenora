@@ -433,17 +433,28 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
                               <AdminTd className="text-right">
                                 <div className="flex items-center justify-end gap-1.5 flex-wrap">
                                   {(() => {
+                                    if (tx.status !== 'PENDING_REVIEW') return null;
                                     const pendingDep = pendingDepositByRef.get(tx.referenceNumber);
                                     const pendingWth = pendingWithdrawalByRef.get(tx.referenceNumber);
-                                    if (tx.status !== 'PENDING_REVIEW') return null;
-                                    if (pendingDep) {
+                                    const looksLikeDeposit =
+                                      Boolean(pendingDep) ||
+                                      tx.operationType === 'SIMULATED_DEPOSIT' ||
+                                      String(tx.referenceNumber || '').startsWith('DEP-HOLD-');
+                                    const looksLikeWithdrawal =
+                                      Boolean(pendingWth) ||
+                                      tx.operationType === 'SIMULATED_WITHDRAWAL' ||
+                                      String(tx.referenceNumber || '').startsWith('WTH-HOLD-');
+                                    // Prefer queue id; fall back to reference (server resolves either).
+                                    const depositKey = pendingDep?.id || tx.referenceNumber;
+                                    const withdrawalKey = pendingWth?.id || tx.referenceNumber;
+                                    if (looksLikeDeposit) {
                                       return (
                                         <>
                                           <AdminButton
                                             type="button"
                                             size="sm"
                                             variant="success"
-                                            onClick={() => approvePendingDeposit(pendingDep.id)}
+                                            onClick={() => approvePendingDeposit(depositKey)}
                                           >
                                             Approve
                                           </AdminButton>
@@ -452,7 +463,7 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
                                             size="sm"
                                             variant="danger"
                                             onClick={() => {
-                                              setDepositRejectId(pendingDep.id);
+                                              setDepositRejectId(depositKey);
                                               setDepositRejectReason('');
                                               setWithdrawalRejectId(null);
                                             }}
@@ -462,14 +473,14 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
                                         </>
                                       );
                                     }
-                                    if (pendingWth) {
+                                    if (looksLikeWithdrawal) {
                                       return (
                                         <>
                                           <AdminButton
                                             type="button"
                                             size="sm"
                                             variant="success"
-                                            onClick={() => approvePendingWithdrawal(pendingWth.id)}
+                                            onClick={() => approvePendingWithdrawal(withdrawalKey)}
                                           >
                                             Approve
                                           </AdminButton>
@@ -478,7 +489,7 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
                                             size="sm"
                                             variant="danger"
                                             onClick={() => {
-                                              setWithdrawalRejectId(pendingWth.id);
+                                              setWithdrawalRejectId(withdrawalKey);
                                               setWithdrawalRejectReason('');
                                               setDepositRejectId(null);
                                             }}
@@ -488,11 +499,7 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
                                         </>
                                       );
                                     }
-                                    return (
-                                      <span className="text-[10px] text-amber-700 max-w-[8rem] text-right">
-                                        Refresh to load approval queue
-                                      </span>
-                                    );
+                                    return null;
                                   })()}
                                   <button
                                     onClick={() => inspectTransaction(tx.transactionId)}
