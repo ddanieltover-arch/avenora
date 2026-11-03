@@ -60,7 +60,13 @@ const emptyUploadSlot = (): UploadSlot => ({
   savedLabel: null,
 });
 
-const MAX_REVIEW_PREVIEW_CHARS = 1_600_000;
+/** Per-image preview cap — keep well under Express 1mb JSON body when 2–3 docs submit. */
+const MAX_REVIEW_PREVIEW_CHARS = 180_000;
+/** Total preview chars across all documents in one submit (leaves headroom for form fields). */
+const TOTAL_PREVIEW_BUDGET_CHARS = 700_000;
+
+const KYC_PAYLOAD_TOO_LARGE_MESSAGE =
+  'Images are too large to submit — try again or use smaller photos.';
 
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -75,7 +81,7 @@ function readFileAsDataUrl(file: File): Promise<string> {
 async function fileToReviewPreviewDataUrl(file: File): Promise<string | undefined> {
   try {
     if (!file.type.startsWith('image/')) {
-      if (file.size > 350_000) return undefined;
+      if (file.size > 120_000) return undefined;
       const raw = await readFileAsDataUrl(file);
       return raw.length <= MAX_REVIEW_PREVIEW_CHARS ? raw : undefined;
     }
@@ -88,7 +94,7 @@ async function fileToReviewPreviewDataUrl(file: File): Promise<string | undefine
         el.onerror = () => reject(new Error('Image decode failed'));
         el.src = objectUrl;
       });
-      const maxEdge = 1280;
+      const maxEdge = 960;
       const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
       const width = Math.max(1, Math.round(img.width * scale));
       const height = Math.max(1, Math.round(img.height * scale));
@@ -98,10 +104,10 @@ async function fileToReviewPreviewDataUrl(file: File): Promise<string | undefine
       const ctx = canvas.getContext('2d');
       if (!ctx) return undefined;
       ctx.drawImage(img, 0, 0, width, height);
-      let quality = 0.72;
+      let quality = 0.68;
       let dataUrl = canvas.toDataURL('image/jpeg', quality);
-      while (dataUrl.length > MAX_REVIEW_PREVIEW_CHARS && quality > 0.35) {
-        quality -= 0.12;
+      while (dataUrl.length > MAX_REVIEW_PREVIEW_CHARS && quality > 0.28) {
+        quality -= 0.1;
         dataUrl = canvas.toDataURL('image/jpeg', quality);
       }
       return dataUrl.length <= MAX_REVIEW_PREVIEW_CHARS ? dataUrl : undefined;
@@ -111,6 +117,38 @@ async function fileToReviewPreviewDataUrl(file: File): Promise<string | undefine
   } catch {
     return undefined;
   }
+}
+
+type KycSubmitDocument = {
+  type: KycIdentityDocumentType;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  previewDataUrl?: string;
+};
+
+/** Drop largest previews until total stays under the Express-safe budget. */
+function enforcePreviewBudget(documents: KycSubmitDocument[]): KycSubmitDocument[] {
+  const next = documents.map((doc) => ({ ...doc }));
+  const totalChars = () =>
+    next.reduce((sum, doc) => sum + (doc.previewDataUrl?.length ?? 0), 0);
+
+  while (totalChars() > TOTAL_PREVIEW_BUDGET_CHARS) {
+    let largestIdx = -1;
+    let largestLen = 0;
+    for (let i = 0; i < next.length; i += 1) {
+      const len = next[i].previewDataUrl?.length ?? 0;
+      if (len > largestLen) {
+        largestLen = len;
+        largestIdx = i;
+      }
+    }
+    if (largestIdx < 0 || largestLen === 0) break;
+    const { previewDataUrl: _omit, ...rest } = next[largestIdx];
+    next[largestIdx] = rest;
+  }
+
+  return next;
 }
 
 interface IdentityUploadZoneProps {
@@ -246,6 +284,7 @@ export const KycVerificationView: React.FC = () => {
 
   // Feedback
   const [feedback, setFeedback] = useState<{ success: boolean; message: string } | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const isStaff = user?.role === 'COMPLIANCE_REVIEWER' || user?.role === 'ADMIN' || user?.role === 'SUPER_ADMIN';
 
@@ -443,14 +482,8 @@ export const KycVerificationView: React.FC = () => {
 
   const slotHasFile = (slot: UploadSlot) => Boolean(slot.file || slot.savedLabel);
 
-  const buildDocumentPayload = async () => {
-    const documents: Array<{
-      type: KycIdentityDocumentType;
-      fileName: string;
-      mimeType: string;
-      fileSize: number;
-      previewDataUrl?: string;
-    }> = [];
+  const buildDocumentPayload = async (): Promise<KycSubmitDocument[]> => {
+    const documents: KycSubmitDocument[] = [];
 
     const pushDoc = async (
       type: KycIdentityDocumentType,
@@ -490,11 +523,12 @@ export const KycVerificationView: React.FC = () => {
       await pushDoc('PASSPORT_PHOTOGRAPH', passportPhotoSlot.file, passportPhotoSlot.file.name);
     }
 
-    return documents;
+    return enforcePreviewBudget(documents);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setFeedback(null);
 
     if (!taxIdType || taxIdOptions.length === 0) {
@@ -532,9 +566,9 @@ export const KycVerificationView: React.FC = () => {
       return;
     }
 
-    const documents = await buildDocumentPayload();
-
+    setIsSubmitting(true);
     try {
+      const documents = await buildDocumentPayload();
       const res = await fetch('/api/v1/kyc/submit', {
         method: 'POST',
         headers: {
@@ -555,16 +589,39 @@ export const KycVerificationView: React.FC = () => {
           documents: documents.length > 0 ? documents : undefined,
         }),
       });
-      const data = await res.json();
+
+      const rawText = await res.text();
+      let data: { detail?: string; title?: string } = {};
+      if (rawText) {
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          /* non-JSON body (e.g. Express 413) */
+        }
+      }
+
       if (res.ok) {
         setFeedback(null);
         await fetchProfile();
         refreshUser();
+      } else if (
+        res.status === 413 ||
+        /entity too large|payload too large|request entity/i.test(rawText)
+      ) {
+        setFeedback({ success: false, message: KYC_PAYLOAD_TOO_LARGE_MESSAGE });
       } else {
-        setFeedback({ success: false, message: data.detail || 'Submission failed' });
+        setFeedback({
+          success: false,
+          message: data.detail || data.title || 'Submission failed',
+        });
       }
     } catch (err: any) {
-      setFeedback({ success: false, message: err.message });
+      setFeedback({
+        success: false,
+        message: String(err?.message || 'Submission failed'),
+      });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -902,13 +959,13 @@ export const KycVerificationView: React.FC = () => {
             />
           </div>
 
-          <div className="flex justify-center pt-2">
+          <div className="flex justify-center pt-2 pb-1">
             <button
               type="submit"
-              disabled={taxIdOptions.length === 0}
-              className="px-5 py-2.5 rounded-lg bg-brand-primary hover:bg-brand-deep disabled:opacity-50 text-white font-medium text-xs shadow-md transition"
+              disabled={taxIdOptions.length === 0 || isSubmitting}
+              className="w-full sm:w-auto min-h-11 px-5 py-3 rounded-lg bg-brand-primary hover:bg-brand-deep disabled:opacity-50 text-white font-medium text-sm shadow-md transition touch-manipulation"
             >
-              Submit for Compliance Verification
+              {isSubmitting ? 'Submitting…' : 'Submit for Compliance Verification'}
             </button>
           </div>
         </form>

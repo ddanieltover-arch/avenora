@@ -99,7 +99,7 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
     <div className="space-y-6">
                 <AdminPageHeader
               title="Transaction Investigation & Reversals"
-              subtitle="Inspect transaction state transitions and double-entry journal entries. Erroneous postings can be reversed via compensating journal entries."
+              subtitle="Approve pending deposit and withdrawal funding holds, inspect transaction state transitions and journal entries, and reverse erroneous postings via compensating entries."
               actions={
                 <AdminButton variant="secondary" onClick={fetchTransactions}>
                   <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />

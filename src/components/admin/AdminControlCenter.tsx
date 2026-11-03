@@ -940,8 +940,16 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
 
   // Initial and tab change loading
   useEffect(() => {
-    if (activeTab === 'overview') fetchOverview();
-    if (activeTab === 'customers') fetchCustomers();
+    if (activeTab === 'overview') {
+      fetchOverview();
+      void fetchPendingDeposits();
+      void fetchPendingWithdrawals();
+    }
+    if (activeTab === 'customers') {
+      fetchCustomers();
+      void fetchPendingDeposits();
+      void fetchPendingWithdrawals();
+    }
     if (activeTab === 'kyc') fetchKycQueue();
     if (activeTab === 'transactions') fetchTransactions();
     if (activeTab === 'loans_grants') fetchLoansAndGrants();
@@ -962,8 +970,16 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const refreshActiveTab = () => {
-    if (activeTab === 'overview') fetchOverview();
-    if (activeTab === 'customers') fetchCustomers();
+    if (activeTab === 'overview') {
+      fetchOverview();
+      void fetchPendingDeposits();
+      void fetchPendingWithdrawals();
+    }
+    if (activeTab === 'customers') {
+      fetchCustomers();
+      void fetchPendingDeposits();
+      void fetchPendingWithdrawals();
+    }
     if (activeTab === 'kyc') fetchKycQueue();
     if (activeTab === 'transactions') fetchTransactions();
     if (activeTab === 'loans_grants') fetchLoansAndGrants();
@@ -1158,6 +1174,20 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
                     fundingReason={fundingReason}
                     setFundingReason={setFundingReason}
                     handleFundingAdjustment={handleFundingAdjustment}
+                    pendingDeposits={pendingDeposits}
+                    pendingWithdrawals={pendingWithdrawals}
+                    depositRejectId={depositRejectId}
+                    setDepositRejectId={setDepositRejectId}
+                    depositRejectReason={depositRejectReason}
+                    setDepositRejectReason={setDepositRejectReason}
+                    approvePendingDeposit={approvePendingDeposit}
+                    rejectPendingDeposit={rejectPendingDeposit}
+                    withdrawalRejectId={withdrawalRejectId}
+                    setWithdrawalRejectId={setWithdrawalRejectId}
+                    withdrawalRejectReason={withdrawalRejectReason}
+                    setWithdrawalRejectReason={setWithdrawalRejectReason}
+                    approvePendingWithdrawal={approvePendingWithdrawal}
+                    rejectPendingWithdrawal={rejectPendingWithdrawal}
                   />
                 )}
         {activeTab === 'kyc' && (

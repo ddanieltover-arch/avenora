@@ -200,7 +200,7 @@ export class KycService {
       const preview =
         typeof doc.previewDataUrl === 'string' &&
         doc.previewDataUrl.startsWith('data:') &&
-        doc.previewDataUrl.length <= 1_800_000
+        doc.previewDataUrl.length <= 200_000
           ? doc.previewDataUrl
           : undefined;
       return {

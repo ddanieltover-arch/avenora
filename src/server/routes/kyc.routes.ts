@@ -44,11 +44,11 @@ const KycSubmitSchema = z.object({
         fileName: z.string(),
         mimeType: z.string(),
         fileSize: z.number().positive(),
-        /** Optional staff-review preview (data URL). Capped server-side. */
+        /** Optional staff-review preview (data URL). Kept small so multi-doc JSON fits Express 1mb. */
         previewDataUrl: z
           .string()
           .startsWith('data:')
-          .max(1_800_000)
+          .max(200_000)
           .optional(),
       })
     )

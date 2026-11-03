@@ -10,6 +10,12 @@ import { Resend } from 'resend';
 import { getValidatedConfig } from '../../config/env.config.ts';
 import { adminInbox, contactInbox, supportInbox } from '../emails/compose.ts';
 import type { EmailPayload } from '../emails/types.ts';
+import {
+  EMAIL_LOGO_BASE64,
+  EMAIL_LOGO_CONTENT_ID,
+  EMAIL_LOGO_CONTENT_TYPE,
+  EMAIL_LOGO_FILENAME,
+} from '../emails/assets/emailLogo.ts';
 import { buildWelcomeEmail } from '../emails/templates/welcome.ts';
 import * as authTpl from '../emails/templates/auth.ts';
 import * as kycTpl from '../emails/templates/kyc.ts';
@@ -89,6 +95,15 @@ export class EmailService {
         text: params.text,
         replyTo: params.replyTo || config.EMAIL_REPLY_TO || undefined,
         tags: params.tags,
+        // Inline brand mark so the header logo renders without fetching the site
+        attachments: [
+          {
+            filename: EMAIL_LOGO_FILENAME,
+            content: Buffer.from(EMAIL_LOGO_BASE64, 'base64'),
+            contentId: EMAIL_LOGO_CONTENT_ID,
+            contentType: EMAIL_LOGO_CONTENT_TYPE,
+          },
+        ],
       });
 
       if (error) {

@@ -48,7 +48,7 @@ export const AdminOverviewSection: React.FC<AdminOverviewSectionProps> = ({
                 />
 
                 {/* Key Metric Cards — click through to matching admin sections */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-6 gap-4">
                   <button
                     type="button"
                     onClick={() => onTabChange('customers')}
@@ -162,6 +162,41 @@ export const AdminOverviewSection: React.FC<AdminOverviewSectionProps> = ({
                     <div className="mt-2 text-xs text-brand-muted flex items-center justify-between border-t border-slate-100 pt-2">
                       <span>Posted: <strong className="text-emerald-700">{overviewData?.transactions.posted ?? 0}</strong></span>
                       <span>Compensated/Reversed: <strong className="text-amber-700">{overviewData?.transactions.reversed ?? 0}</strong></span>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onTabChange('transactions')}
+                    className="bg-white rounded-xl border border-amber-200/80 p-5 shadow-xs text-left transition hover:border-amber-400/60 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/35 cursor-pointer"
+                  >
+                    <div className="flex items-center justify-between text-brand-muted text-xs font-semibold uppercase tracking-wider mb-2">
+                      <span>Funding Approvals</span>
+                      <DollarSign className="w-4 h-4 text-amber-600" />
+                    </div>
+                    <div className="text-2xl font-bold text-brand-deep">
+                      {overviewData
+                        ? (overviewData.deposits?.pendingReview ?? 0) +
+                          (overviewData.withdrawals?.pendingReview ?? 0)
+                        : '—'}
+                    </div>
+                    <div className="mt-2 text-xs text-brand-muted flex items-center justify-between border-t border-slate-100 pt-2 gap-2">
+                      <span>
+                        Deposits:{' '}
+                        <strong className="text-amber-700">
+                          {overviewData?.deposits?.pendingReview ?? 0}
+                        </strong>
+                      </span>
+                      <span>
+                        Withdrawals:{' '}
+                        <strong className="text-amber-700">
+                          {overviewData?.withdrawals?.pendingReview ?? 0}
+                        </strong>
+                      </span>
+                      <span className="text-[11px] text-brand-primary font-semibold flex items-center gap-0.5">
+                        Open queue
+                        <ChevronRight className="w-3 h-3" />
+                      </span>
                     </div>
                   </button>
                 </div>

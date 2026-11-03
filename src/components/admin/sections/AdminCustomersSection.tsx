@@ -72,6 +72,20 @@ export interface AdminCustomersSectionProps {
   fundingReason: string;
   setFundingReason: (v: string) => void;
   handleFundingAdjustment: () => void;
+  pendingDeposits: any[];
+  pendingWithdrawals: any[];
+  depositRejectId: string | null;
+  setDepositRejectId: (v: string | null) => void;
+  depositRejectReason: string;
+  setDepositRejectReason: (v: string) => void;
+  approvePendingDeposit: (id: string) => void;
+  rejectPendingDeposit: () => void;
+  withdrawalRejectId: string | null;
+  setWithdrawalRejectId: (v: string | null) => void;
+  withdrawalRejectReason: string;
+  setWithdrawalRejectReason: (v: string) => void;
+  approvePendingWithdrawal: (id: string) => void;
+  rejectPendingWithdrawal: () => void;
 }
 
 export const AdminCustomersSection: React.FC<AdminCustomersSectionProps> = ({
@@ -114,7 +128,41 @@ export const AdminCustomersSection: React.FC<AdminCustomersSectionProps> = ({
   fundingReason,
   setFundingReason,
   handleFundingAdjustment,
+  pendingDeposits,
+  pendingWithdrawals,
+  depositRejectId,
+  setDepositRejectId,
+  depositRejectReason,
+  setDepositRejectReason,
+  approvePendingDeposit,
+  rejectPendingDeposit,
+  withdrawalRejectId,
+  setWithdrawalRejectId,
+  withdrawalRejectReason,
+  setWithdrawalRejectReason,
+  approvePendingWithdrawal,
+  rejectPendingWithdrawal,
 }) => {
+  const customerId = selectedCustomer?.customer?.id as string | undefined;
+  const customerPendingDeposits = customerId
+    ? pendingDeposits.filter(
+        (d) => d.userId === customerId && (!d.status || d.status === 'PENDING_REVIEW')
+      )
+    : [];
+  const customerPendingWithdrawals = customerId
+    ? pendingWithdrawals.filter(
+        (w) => w.userId === customerId && (!w.status || w.status === 'PENDING_REVIEW')
+      )
+    : [];
+  const hasCustomerPendingFunding =
+    customerPendingDeposits.length > 0 || customerPendingWithdrawals.length > 0;
+  const customerDepositRejectOpen =
+    Boolean(depositRejectId) &&
+    customerPendingDeposits.some((d) => d.id === depositRejectId);
+  const customerWithdrawalRejectOpen =
+    Boolean(withdrawalRejectId) &&
+    customerPendingWithdrawals.some((w) => w.id === withdrawalRejectId);
+
   return (
     <div className="space-y-6">
                 <AdminPageHeader
@@ -385,6 +433,170 @@ export const AdminCustomersSection: React.FC<AdminCustomersSectionProps> = ({
                           </div>
                         )}
 
+                      {/* Pending funding for this customer */}
+                      {hasCustomerPendingFunding && (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50/40 p-3 space-y-3">
+                          <div>
+                            <h4 className="text-xs font-semibold uppercase text-brand-deep mb-0.5">
+                              Pending funding
+                            </h4>
+                            <p className="text-[10px] text-brand-muted">
+                              Approve or reject holds queued for this customer. Full queue also lives on the Transactions tab.
+                            </p>
+                          </div>
+
+                          {customerPendingDeposits.map((dep) => (
+                            <div
+                              key={dep.id}
+                              className="p-2.5 rounded-lg bg-white border border-amber-200/80 space-y-2"
+                            >
+                              <div className="flex items-start justify-between gap-2 text-xs">
+                                <div className="min-w-0">
+                                  <span className="font-mono font-semibold text-slate-800 block truncate">
+                                    {dep.referenceNumber}
+                                  </span>
+                                  <span className="text-[10px] text-brand-muted block">
+                                    Deposit · {dep.origin === 'ADMIN' ? 'Admin' : 'Customer'}
+                                    {dep.initiationReason ? ` · ${dep.initiationReason}` : ''}
+                                  </span>
+                                </div>
+                                <span className="font-bold text-slate-900 shrink-0">{dep.formattedAmount}</span>
+                              </div>
+                              <div className="flex justify-end gap-2">
+                                <AdminButton
+                                  type="button"
+                                  size="sm"
+                                  variant="success"
+                                  onClick={() => approvePendingDeposit(dep.id)}
+                                  disabled={loading}
+                                >
+                                  Approve
+                                </AdminButton>
+                                <AdminButton
+                                  type="button"
+                                  size="sm"
+                                  variant="danger"
+                                  onClick={() => {
+                                    setDepositRejectId(dep.id);
+                                    setDepositRejectReason('');
+                                    setWithdrawalRejectId(null);
+                                  }}
+                                  disabled={loading}
+                                >
+                                  Reject
+                                </AdminButton>
+                              </div>
+                            </div>
+                          ))}
+
+                          {customerPendingWithdrawals.map((wth) => (
+                            <div
+                              key={wth.id}
+                              className="p-2.5 rounded-lg bg-white border border-brand-primary/20 space-y-2"
+                            >
+                              <div className="flex items-start justify-between gap-2 text-xs">
+                                <div className="min-w-0">
+                                  <span className="font-mono font-semibold text-slate-800 block truncate">
+                                    {wth.referenceNumber}
+                                  </span>
+                                  <span className="text-[10px] text-brand-muted block">
+                                    Withdrawal · {wth.origin === 'ADMIN' ? 'Admin' : 'Customer'}
+                                    {wth.initiationReason ? ` · ${wth.initiationReason}` : ''}
+                                  </span>
+                                </div>
+                                <span className="font-bold text-slate-900 shrink-0">{wth.formattedAmount}</span>
+                              </div>
+                              <div className="flex justify-end gap-2">
+                                <AdminButton
+                                  type="button"
+                                  size="sm"
+                                  variant="success"
+                                  onClick={() => approvePendingWithdrawal(wth.id)}
+                                  disabled={loading}
+                                >
+                                  Approve
+                                </AdminButton>
+                                <AdminButton
+                                  type="button"
+                                  size="sm"
+                                  variant="danger"
+                                  onClick={() => {
+                                    setWithdrawalRejectId(wth.id);
+                                    setWithdrawalRejectReason('');
+                                    setDepositRejectId(null);
+                                  }}
+                                  disabled={loading}
+                                >
+                                  Reject
+                                </AdminButton>
+                              </div>
+                            </div>
+                          ))}
+
+                          {customerDepositRejectOpen && (
+                            <div className="p-2.5 rounded-lg bg-white border border-rose-200 space-y-2">
+                              <h5 className="text-xs font-bold text-brand-deep">Reject deposit</h5>
+                              <textarea
+                                value={depositRejectReason}
+                                onChange={(e) => setDepositRejectReason(e.target.value)}
+                                placeholder="Reason for rejection (required)"
+                                className={`w-full min-h-[64px] ${adminInputClass}`}
+                              />
+                              <div className="flex justify-end gap-2">
+                                <AdminButton
+                                  type="button"
+                                  variant="secondary"
+                                  size="sm"
+                                  onClick={() => setDepositRejectId(null)}
+                                >
+                                  Cancel
+                                </AdminButton>
+                                <AdminButton
+                                  type="button"
+                                  variant="danger"
+                                  size="sm"
+                                  onClick={rejectPendingDeposit}
+                                  disabled={!depositRejectReason.trim() || loading}
+                                >
+                                  Confirm reject
+                                </AdminButton>
+                              </div>
+                            </div>
+                          )}
+
+                          {customerWithdrawalRejectOpen && (
+                            <div className="p-2.5 rounded-lg bg-white border border-rose-200 space-y-2">
+                              <h5 className="text-xs font-bold text-brand-deep">Reject withdrawal</h5>
+                              <textarea
+                                value={withdrawalRejectReason}
+                                onChange={(e) => setWithdrawalRejectReason(e.target.value)}
+                                placeholder="Reason for rejection (required)"
+                                className={`w-full min-h-[64px] ${adminInputClass}`}
+                              />
+                              <div className="flex justify-end gap-2">
+                                <AdminButton
+                                  type="button"
+                                  variant="secondary"
+                                  size="sm"
+                                  onClick={() => setWithdrawalRejectId(null)}
+                                >
+                                  Cancel
+                                </AdminButton>
+                                <AdminButton
+                                  type="button"
+                                  variant="danger"
+                                  size="sm"
+                                  onClick={rejectPendingWithdrawal}
+                                  disabled={!withdrawalRejectReason.trim() || loading}
+                                >
+                                  Confirm reject
+                                </AdminButton>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       {/* Payment Cards */}
                       <div>
                         <h4 className="text-xs font-semibold uppercase text-brand-deep mb-2">Associated Cards (Masked)</h4>
@@ -420,6 +632,11 @@ export const AdminCustomersSection: React.FC<AdminCustomersSectionProps> = ({
                                 <div>
                                   <span className="font-semibold text-slate-800 block">{tx.referenceNumber}</span>
                                   <span className="text-[10px] text-brand-muted">{tx.narration || tx.operationType}</span>
+                                  {tx.status === 'PENDING_REVIEW' && hasCustomerPendingFunding && (
+                                    <span className="text-[10px] text-amber-700 block mt-0.5">
+                                      Approve under Pending funding above
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="text-right">
                                   <span className="font-bold text-slate-900 block">{tx.formattedAmount}</span>

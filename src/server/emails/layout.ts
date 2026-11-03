@@ -60,9 +60,13 @@ export function getAppBaseUrl(): string {
   return configured;
 }
 
-/** Absolute URL for the header logo (white A on teal — email clients need absolute src). */
+/**
+ * Header logo src for HTML emails.
+ * Uses a CID reference paired with an inline attachment in EmailService
+ * (external URLs break when APP_URL is wrong or clients block remote images).
+ */
 export function getEmailLogoUrl(): string {
-  return `${getAppBaseUrl()}/avenora-header-logo.jpg`;
+  return 'cid:avenora-header-logo';
 }
 
 export function getSupportEmail(): string {
