@@ -99,6 +99,10 @@ export class AuthService {
     this.readyPromise = this.bootstrap();
   }
 
+  public whenReady(): Promise<void> {
+    return this.readyPromise;
+  }
+
   private async bootstrap(): Promise<void> {
     await this.hydrateFromDatabase();
     await this.seedPrimaryAdminAccount();

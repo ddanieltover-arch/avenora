@@ -9,13 +9,14 @@ import { KycService } from '../../src/server/services/kyc.service.ts';
 describe('Simulated KYC & Customer Verification Engine', () => {
   let kycService: KycService;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     kycService = new KycService();
+    await kycService.whenReady();
   });
 
-  it('submits verification profile with masked tax ID and private vault storage references', () => {
+  it('submits verification profile with masked tax ID and private vault storage references', async () => {
     const userId = 'usr_kyc_test_01';
-    const profile = kycService.submitVerification({
+    const profile = await kycService.submitVerification({
       userId,
       tier: 1,
       legalFirstName: 'Elena',
@@ -46,11 +47,11 @@ describe('Simulated KYC & Customer Verification Engine', () => {
     expect(profile.documentRefs[0]!.storageRef.startsWith('vault://kyc/')).toBe(true);
   });
 
-  it('enforces country tax ID formats (validates US SSN, BR CPF, ES DNI)', () => {
+  it('enforces country tax ID formats (validates US SSN, BR CPF, ES DNI)', async () => {
     const userId = 'usr_kyc_tax_test';
 
     // Invalid SSN length
-    expect(() =>
+    await expect(
       kycService.submitVerification({
         userId,
         legalFirstName: 'John',
@@ -59,11 +60,11 @@ describe('Simulated KYC & Customer Verification Engine', () => {
         taxIdType: 'SSN',
         taxIdNumber: '12', // Too short
         residentialAddress: { street: 'Main St', city: 'Austin', postalCode: '78701', country: 'US' },
-      })
-    ).toThrow(/US SSN must be 9 digits/);
+      }),
+    ).rejects.toThrow(/US SSN must be 9 digits/);
 
     // Invalid CPF length
-    expect(() =>
+    await expect(
       kycService.submitVerification({
         userId,
         legalFirstName: 'Carlos',
@@ -72,13 +73,13 @@ describe('Simulated KYC & Customer Verification Engine', () => {
         taxIdType: 'CPF',
         taxIdNumber: '123456', // Too short for Brazilian CPF
         residentialAddress: { street: 'Av Paulista', city: 'São Paulo', postalCode: '01310-100', country: 'BR' },
-      })
-    ).toThrow(/Brazilian CPF must be 11 digits/);
+      }),
+    ).rejects.toThrow(/Brazilian CPF must be 11 digits/);
   });
 
   it('restricts verification approval to compliance reviewers and prevents unauthorized customer self-approval', async () => {
     const userId = 'usr_kyc_review_target';
-    kycService.submitVerification({
+    await kycService.submitVerification({
       userId,
       legalFirstName: 'Marcus',
       legalLastName: 'Aurelius',
@@ -89,15 +90,15 @@ describe('Simulated KYC & Customer Verification Engine', () => {
     });
 
     // Customer attempt to approve: Access Denied!
-    expect(() =>
+    await expect(
       kycService.reviewProfile({
         reviewerRole: 'CUSTOMER',
         reviewerUserId: userId,
         reviewerName: 'Marcus Aurelius',
         targetUserId: userId,
         decision: 'APPROVED',
-      })
-    ).toThrow(/Access denied/);
+      }),
+    ).rejects.toThrow(/Access denied/);
 
     // Compliance officer approval succeeds
     const approvedProfile = await kycService.reviewProfile({
@@ -114,9 +115,9 @@ describe('Simulated KYC & Customer Verification Engine', () => {
     expect(approvedProfile.reviewHistory[0]!.reviewerName).toBe('Maria Chen (Compliance)');
   });
 
-  it('attaches external verification results as advisory intelligence without automatically approving customer', () => {
+  it('attaches external verification results as advisory intelligence without automatically approving customer', async () => {
     const userId = 'usr_kyc_ext_advisory_01';
-    kycService.submitVerification({
+    await kycService.submitVerification({
       userId,
       legalFirstName: 'Sarah',
       legalLastName: 'Connor',
@@ -149,9 +150,9 @@ describe('Simulated KYC & Customer Verification Engine', () => {
     expect(updated.externalVerification?.disclaimer).toContain('REQUIRES FINAL COMPLIANCE OFFICER DETERMINATION');
   });
 
-  it('treats failed signature verification as UNRESOLVED and does not grant verification credit', () => {
+  it('treats failed signature verification as UNRESOLVED and does not grant verification credit', async () => {
     const userId = 'usr_kyc_unresolved_01';
-    kycService.submitVerification({
+    await kycService.submitVerification({
       userId,
       legalFirstName: 'John',
       legalLastName: 'Smith',
@@ -175,9 +176,9 @@ describe('Simulated KYC & Customer Verification Engine', () => {
     expect(updated.status).toBe('UNDER_REVIEW');
   });
 
-  it('strictly enforces document access control and blocks unauthorized access to customer identity artifacts', () => {
+  it('strictly enforces document access control and blocks unauthorized access to customer identity artifacts', async () => {
     const userId = 'usr_doc_owner_01';
-    const profile = kycService.submitVerification({
+    const profile = await kycService.submitVerification({
       userId,
       legalFirstName: 'Alice',
       legalLastName: 'Wonderland',
@@ -213,7 +214,7 @@ describe('Simulated KYC & Customer Verification Engine', () => {
         documentId: docId,
         actorUserId: 'usr_malicious_other_customer',
         actorRole: 'CUSTOMER',
-      })
+      }),
     ).toThrow(/Access denied/);
 
     // Compliance reviewer access granted

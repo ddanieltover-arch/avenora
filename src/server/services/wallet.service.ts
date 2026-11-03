@@ -206,7 +206,9 @@ export class WalletService {
 
   private async bootstrap(): Promise<void> {
     await defaultLedgerService.whenReady();
+    await defaultAuthService.whenReady();
     await this.hydrateFromDatabase();
+    await this.rebuildPendingQueuesFromLedger();
   }
 
   private async hydrateFromDatabase(): Promise<void> {
@@ -318,6 +320,104 @@ export class WalletService {
         isExecuted: q.isExecuted,
         createdAt: q.createdAt,
       });
+    }
+  }
+
+  /**
+   * Ledger hold postings can outlive pending_* rows (serverless cold starts / failed queue writes).
+   * Rebuild APPROVAL queue entries from still-pending hold journal history so Approve/Reject works.
+   */
+  private async rebuildPendingQueuesFromLedger(): Promise<void> {
+    const existingDepRefs = new Set(this.pendingDeposits.map((d) => d.referenceNumber));
+    const existingWthRefs = new Set(this.pendingWithdrawals.map((w) => w.referenceNumber));
+    const userIds = new Set<string>();
+    for (const acc of defaultLedgerService.getAccounts()) {
+      if (acc.userId) userIds.add(acc.userId);
+    }
+
+    for (const userId of userIds) {
+      for (const tx of this.buildLedgerBackedHistory(userId)) {
+        if (tx.status !== 'PENDING_REVIEW' || !tx.userId) continue;
+
+        const narration = (tx.narration || '').toLowerCase();
+        const isAdminOrigin =
+          (tx.counterparty || '').toLowerCase().includes('admin') ||
+          narration.includes('admin funding') ||
+          narration.includes('admin debit') ||
+          narration.includes('admin adjustment');
+
+        if (
+          tx.operationType === 'SIMULATED_DEPOSIT' &&
+          (tx.referenceNumber.startsWith('DEP-HOLD-') ||
+            tx.transactionId.includes('_hold') ||
+            narration.includes('pending'))
+        ) {
+          if (existingDepRefs.has(tx.referenceNumber)) continue;
+          const money = Money.fromMinor(tx.amountMinor, tx.currency);
+          const record: PendingDepositRecord = {
+            id: `dep_rebuild_${tx.journalEntryId}`,
+            userId: tx.userId,
+            kind: 'FIAT',
+            currency: tx.currency,
+            amountDecimal: money.toDecimalString(),
+            amountMinor: tx.amountMinor,
+            formattedAmount: tx.formattedAmount,
+            sourceRail: isAdminOrigin ? 'ADMIN_FUNDING' : undefined,
+            submittedAt: new Date(tx.timestamp),
+            status: 'PENDING_REVIEW',
+            holdJournalEntryId: tx.journalEntryId,
+            referenceNumber: tx.referenceNumber,
+            origin: isAdminOrigin ? 'ADMIN' : 'CUSTOMER',
+            initiationReason: isAdminOrigin
+              ? 'Admin funding credit (restored from ledger hold)'
+              : 'Deposit hold restored from ledger',
+          };
+          this.pendingDeposits.push(record);
+          existingDepRefs.add(record.referenceNumber);
+          try {
+            await this.persistPendingDeposit(record);
+          } catch (err) {
+            console.error('[wallet] failed to persist rebuilt pending deposit:', err);
+          }
+          continue;
+        }
+
+        if (
+          tx.operationType === 'SIMULATED_WITHDRAWAL' &&
+          (tx.referenceNumber.startsWith('WTH-HOLD-') ||
+            tx.transactionId.includes('_hold') ||
+            narration.includes('pending'))
+        ) {
+          if (existingWthRefs.has(tx.referenceNumber)) continue;
+          const money = Money.fromMinor(tx.amountMinor, tx.currency);
+          const record: PendingWithdrawalRecord = {
+            id: `wth_rebuild_${tx.journalEntryId}`,
+            userId: tx.userId,
+            kind: 'FIAT',
+            currency: tx.currency,
+            amountDecimal: money.toDecimalString(),
+            amountMinor: tx.amountMinor,
+            formattedAmount: tx.formattedAmount,
+            destinationRail: isAdminOrigin ? 'ADMIN_ADJUSTMENT' : undefined,
+            bankingDetails: {},
+            submittedAt: new Date(tx.timestamp),
+            status: 'PENDING_REVIEW',
+            holdJournalEntryId: tx.journalEntryId,
+            referenceNumber: tx.referenceNumber,
+            origin: isAdminOrigin ? 'ADMIN' : 'CUSTOMER',
+            initiationReason: isAdminOrigin
+              ? 'Admin funding debit (restored from ledger hold)'
+              : 'Withdrawal hold restored from ledger',
+          };
+          this.pendingWithdrawals.push(record);
+          existingWthRefs.add(record.referenceNumber);
+          try {
+            await this.persistPendingWithdrawal(record);
+          } catch (err) {
+            console.error('[wallet] failed to persist rebuilt pending withdrawal:', err);
+          }
+        }
+      }
     }
   }
 

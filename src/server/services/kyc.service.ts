@@ -10,6 +10,7 @@
  * - Append-only review history and audit events
  */
 
+import type { KycStatus as PrismaKycStatus } from '@prisma/client';
 import { KycStatus, UserRole } from './auth.service.ts';
 import { defaultAuthService } from './auth.service.ts';
 import { defaultAuditService } from './audit.service.ts';
@@ -21,6 +22,7 @@ import {
   findTaxIdOption,
   UNSUPPORTED_TAX_ID_COUNTRY_MESSAGE,
 } from '../../domain/kyc/taxIdByCountry.ts';
+import { prisma } from '../db/prisma.ts';
 
 export interface DocumentReference {
   id: string;
@@ -110,8 +112,266 @@ export interface KycProfileRecord {
   updatedAt: Date;
 }
 
+/** Packed into reviewHistory JSON so extras survive without a schema migration. */
+interface KycReviewHistoryEnvelope {
+  v: 1;
+  version: number;
+  resubmissionCount: number;
+  taxIdFull?: string;
+  reasonCode?: string;
+  verifiedCountryCode?: string;
+  customerNotifications: KycCustomerNotification[];
+  externalVerification?: ExternalKycRecord;
+  events: ReviewHistoryEvent[];
+}
+
 export class KycService {
   private profilesByUserId = new Map<string, KycProfileRecord>();
+  private readyPromise: Promise<void>;
+
+  constructor() {
+    this.readyPromise = this.bootstrap();
+  }
+
+  public whenReady(): Promise<void> {
+    return this.readyPromise;
+  }
+
+  private async bootstrap(): Promise<void> {
+    await this.hydrateFromDatabase();
+  }
+
+  private parseJsonArray<T>(raw: string | null | undefined, fallback: T[] = []): T[] {
+    if (!raw) return fallback;
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as T[]) : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  private reviveDates<T extends Record<string, unknown>>(obj: T, keys: string[]): T {
+    const next = { ...obj };
+    for (const key of keys) {
+      const val = next[key];
+      if (typeof val === 'string' || typeof val === 'number') {
+        (next as Record<string, unknown>)[key] = new Date(val);
+      }
+    }
+    return next;
+  }
+
+  private encodeReviewHistory(profile: KycProfileRecord): string {
+    const envelope: KycReviewHistoryEnvelope = {
+      v: 1,
+      version: profile.version,
+      resubmissionCount: profile.resubmissionCount,
+      taxIdFull: profile.taxIdFull,
+      reasonCode: profile.reasonCode,
+      verifiedCountryCode: profile.verifiedCountryCode,
+      customerNotifications: profile.customerNotifications,
+      externalVerification: profile.externalVerification,
+      events: profile.reviewHistory,
+    };
+    return JSON.stringify(envelope);
+  }
+
+  private decodeReviewHistory(raw: string | null | undefined): Pick<
+    KycProfileRecord,
+    | 'version'
+    | 'resubmissionCount'
+    | 'taxIdFull'
+    | 'reasonCode'
+    | 'verifiedCountryCode'
+    | 'customerNotifications'
+    | 'externalVerification'
+    | 'reviewHistory'
+  > {
+    if (!raw) {
+      return {
+        version: 1,
+        resubmissionCount: 0,
+        customerNotifications: [],
+        reviewHistory: [],
+      };
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return {
+          version: 1,
+          resubmissionCount: 0,
+          customerNotifications: [],
+          reviewHistory: parsed.map((e) =>
+            this.reviveDates(e as ReviewHistoryEvent & Record<string, unknown>, ['timestamp']),
+          ) as ReviewHistoryEvent[],
+        };
+      }
+      if (parsed && typeof parsed === 'object' && parsed.v === 1) {
+        const envelope = parsed as KycReviewHistoryEnvelope;
+        return {
+          version: envelope.version || 1,
+          resubmissionCount: envelope.resubmissionCount || 0,
+          taxIdFull: envelope.taxIdFull,
+          reasonCode: envelope.reasonCode,
+          verifiedCountryCode: envelope.verifiedCountryCode,
+          customerNotifications: (envelope.customerNotifications || []).map((n) =>
+            this.reviveDates(n as KycCustomerNotification & Record<string, unknown>, ['timestamp']),
+          ) as KycCustomerNotification[],
+          externalVerification: envelope.externalVerification
+            ? (this.reviveDates(
+                envelope.externalVerification as ExternalKycRecord & Record<string, unknown>,
+                ['receivedAt'],
+              ) as ExternalKycRecord)
+            : undefined,
+          reviewHistory: (envelope.events || []).map((e) =>
+            this.reviveDates(e as ReviewHistoryEvent & Record<string, unknown>, ['timestamp']),
+          ) as ReviewHistoryEvent[],
+        };
+      }
+    } catch {
+      /* fall through */
+    }
+    return {
+      version: 1,
+      resubmissionCount: 0,
+      customerNotifications: [],
+      reviewHistory: [],
+    };
+  }
+
+  private profileFromPrismaRow(row: {
+    id: string;
+    userId: string;
+    tier: number;
+    status: string;
+    legalFirstName: string | null;
+    legalLastName: string | null;
+    dateOfBirth: string | null;
+    taxIdType: string | null;
+    taxIdMasked: string | null;
+    residentialAddress: string | null;
+    documentRefs: string;
+    submittedAt: Date | null;
+    reviewedAt: Date | null;
+    reviewerUserId: string | null;
+    reviewerNotes: string | null;
+    rejectionReason: string | null;
+    reviewHistory: string;
+    createdAt: Date;
+    updatedAt: Date;
+  }): KycProfileRecord {
+    let residentialAddress: KycProfileRecord['residentialAddress'];
+    if (row.residentialAddress) {
+      try {
+        residentialAddress = JSON.parse(row.residentialAddress);
+      } catch {
+        residentialAddress = undefined;
+      }
+    }
+    const docs = this.parseJsonArray<DocumentReference>(row.documentRefs).map((d) =>
+      this.reviveDates(d as DocumentReference & Record<string, unknown>, ['uploadedAt']),
+    ) as DocumentReference[];
+    const extras = this.decodeReviewHistory(row.reviewHistory);
+
+    return {
+      id: row.id,
+      userId: row.userId,
+      tier: row.tier,
+      status: row.status as KycStatus,
+      version: extras.version,
+      resubmissionCount: extras.resubmissionCount,
+      legalFirstName: row.legalFirstName ?? undefined,
+      legalLastName: row.legalLastName ?? undefined,
+      dateOfBirth: row.dateOfBirth ?? undefined,
+      taxIdType: row.taxIdType ?? undefined,
+      taxIdMasked: row.taxIdMasked ?? undefined,
+      taxIdFull: extras.taxIdFull,
+      residentialAddress,
+      documentRefs: docs,
+      submittedAt: row.submittedAt ?? undefined,
+      reviewedAt: row.reviewedAt ?? undefined,
+      reviewerUserId: row.reviewerUserId ?? undefined,
+      reviewerNotes: row.reviewerNotes ?? undefined,
+      rejectionReason: row.rejectionReason ?? undefined,
+      reasonCode: extras.reasonCode,
+      reviewHistory: extras.reviewHistory,
+      customerNotifications: extras.customerNotifications,
+      externalVerification: extras.externalVerification,
+      verifiedCountryCode: extras.verifiedCountryCode,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  private async hydrateFromDatabase(): Promise<void> {
+    if (process.env.VITEST === 'true' || process.env.NODE_ENV === 'test') {
+      return;
+    }
+    const rows = await prisma.kycProfile.findMany();
+    for (const row of rows) {
+      this.profilesByUserId.set(row.userId, this.profileFromPrismaRow(row));
+    }
+  }
+
+  private async persistProfile(profile: KycProfileRecord): Promise<void> {
+    if (process.env.VITEST === 'true' || process.env.NODE_ENV === 'test') {
+      return;
+    }
+    await prisma.kycProfile.upsert({
+      where: { userId: profile.userId },
+      create: {
+        id: profile.id,
+        userId: profile.userId,
+        tier: profile.tier,
+        status: profile.status as PrismaKycStatus,
+        legalFirstName: profile.legalFirstName ?? null,
+        legalLastName: profile.legalLastName ?? null,
+        dateOfBirth: profile.dateOfBirth ?? null,
+        taxIdType: profile.taxIdType ?? null,
+        taxIdMasked: profile.taxIdMasked ?? null,
+        residentialAddress: profile.residentialAddress
+          ? JSON.stringify(profile.residentialAddress)
+          : null,
+        documentRefs: JSON.stringify(profile.documentRefs || []),
+        submittedAt: profile.submittedAt ?? null,
+        reviewedAt: profile.reviewedAt ?? null,
+        reviewerUserId: profile.reviewerUserId ?? null,
+        reviewerNotes: profile.reviewerNotes ?? null,
+        rejectionReason: profile.rejectionReason ?? null,
+        reviewHistory: this.encodeReviewHistory(profile),
+        createdAt: profile.createdAt,
+        updatedAt: profile.updatedAt,
+      },
+      update: {
+        tier: profile.tier,
+        status: profile.status as PrismaKycStatus,
+        legalFirstName: profile.legalFirstName ?? null,
+        legalLastName: profile.legalLastName ?? null,
+        dateOfBirth: profile.dateOfBirth ?? null,
+        taxIdType: profile.taxIdType ?? null,
+        taxIdMasked: profile.taxIdMasked ?? null,
+        residentialAddress: profile.residentialAddress
+          ? JSON.stringify(profile.residentialAddress)
+          : null,
+        documentRefs: JSON.stringify(profile.documentRefs || []),
+        submittedAt: profile.submittedAt ?? null,
+        reviewedAt: profile.reviewedAt ?? null,
+        reviewerUserId: profile.reviewerUserId ?? null,
+        reviewerNotes: profile.reviewerNotes ?? null,
+        rejectionReason: profile.rejectionReason ?? null,
+        reviewHistory: this.encodeReviewHistory(profile),
+        updatedAt: profile.updatedAt,
+      },
+    });
+  }
+
+  private persistProfileSoon(profile: KycProfileRecord): void {
+    void this.persistProfile(profile).catch((err) =>
+      console.error('[kyc] failed to persist profile:', err),
+    );
+  }
 
   /**
    * Retrieves or initializes a KYC profile for a user.
@@ -132,7 +392,28 @@ export class KycService {
         createdAt: new Date(),
         updatedAt: new Date(),
       };
+
+      // Recover orphaned user.kycStatus after in-memory-only submits (pre-persistence).
+      const user = defaultAuthService.getUserById(userId);
+      if (user?.kycStatus === 'APPROVED') {
+        profile.status = 'APPROVED';
+        profile.verifiedCountryCode = user.countryCode;
+      } else if (
+        user &&
+        (user.kycStatus === 'SUBMITTED' ||
+          user.kycStatus === 'UNDER_REVIEW' ||
+          user.kycStatus === 'NEEDS_MORE_INFORMATION')
+      ) {
+        // Documents were lost with the cold start — clear so the customer can resubmit.
+        user.kycStatus = 'NOT_STARTED';
+        user.updatedAt = new Date();
+        defaultAuthService.syncCustomerActivationFromKyc(userId);
+        defaultAuthService.saveUserSoon(userId);
+        profile.status = 'NOT_STARTED';
+      }
+
       this.profilesByUserId.set(userId, profile);
+      this.persistProfileSoon(profile);
     }
     return profile;
   }
@@ -140,7 +421,7 @@ export class KycService {
   /**
    * Submits or updates verification details. Customer-facing.
    */
-  public submitVerification(params: {
+  public async submitVerification(params: {
     userId: string;
     tier?: number;
     legalFirstName: string;
@@ -167,7 +448,8 @@ export class KycService {
       fileSize: number;
       previewDataUrl?: string;
     }>;
-  }): KycProfileRecord {
+  }): Promise<KycProfileRecord> {
+    await this.readyPromise;
     const profile = this.getOrCreateProfile(params.userId);
 
     // Cannot submit while currently under review or already approved
@@ -275,6 +557,7 @@ export class KycService {
       );
     }
 
+    await this.persistProfile(profile);
     return profile;
   }
 
@@ -293,6 +576,7 @@ export class KycService {
     reasonCode?: string;
     expectedVersion?: number;
   }): Promise<KycProfileRecord> {
+    await this.readyPromise;
     // Strict Server-Side Role Enforcement
     const allowedRoles: UserRole[] = ['COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN'];
     if (!allowedRoles.includes(params.reviewerRole)) {
@@ -479,6 +763,7 @@ export class KycService {
       }
     }
 
+    await this.persistProfile(profile);
     return profile;
   }
 
@@ -607,6 +892,7 @@ export class KycService {
       },
     });
 
+    this.persistProfileSoon(profile);
     return profile;
   }
 

@@ -196,14 +196,18 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       const res = await fetch(`/api/v1/admin/customers/${id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        const data = await res.json();
         setSelectedCustomer(data);
         setFundingDirection('CREDIT');
         setFundingAmount('');
         setFundingReason('');
         setFundingCurrency(data.wallet?.accounts?.[0]?.currency || '');
+      } else {
+        showError(data.detail || data.title || 'Failed to load customer profile');
       }
+    } catch (e: any) {
+      showError(e.message || 'Failed to load customer profile');
     } finally {
       setLoading(false);
     }

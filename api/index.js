@@ -6342,8 +6342,205 @@ var init_kyc_service = __esm({
     init_domesticBankAccount_service();
     init_email_service();
     init_taxIdByCountry();
+    init_prisma();
     KycService = class {
       profilesByUserId = /* @__PURE__ */ new Map();
+      readyPromise;
+      constructor() {
+        this.readyPromise = this.bootstrap();
+      }
+      whenReady() {
+        return this.readyPromise;
+      }
+      async bootstrap() {
+        await this.hydrateFromDatabase();
+      }
+      parseJsonArray(raw, fallback = []) {
+        if (!raw) return fallback;
+        try {
+          const parsed = JSON.parse(raw);
+          return Array.isArray(parsed) ? parsed : fallback;
+        } catch {
+          return fallback;
+        }
+      }
+      reviveDates(obj, keys) {
+        const next = { ...obj };
+        for (const key of keys) {
+          const val = next[key];
+          if (typeof val === "string" || typeof val === "number") {
+            next[key] = new Date(val);
+          }
+        }
+        return next;
+      }
+      encodeReviewHistory(profile) {
+        const envelope = {
+          v: 1,
+          version: profile.version,
+          resubmissionCount: profile.resubmissionCount,
+          taxIdFull: profile.taxIdFull,
+          reasonCode: profile.reasonCode,
+          verifiedCountryCode: profile.verifiedCountryCode,
+          customerNotifications: profile.customerNotifications,
+          externalVerification: profile.externalVerification,
+          events: profile.reviewHistory
+        };
+        return JSON.stringify(envelope);
+      }
+      decodeReviewHistory(raw) {
+        if (!raw) {
+          return {
+            version: 1,
+            resubmissionCount: 0,
+            customerNotifications: [],
+            reviewHistory: []
+          };
+        }
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            return {
+              version: 1,
+              resubmissionCount: 0,
+              customerNotifications: [],
+              reviewHistory: parsed.map(
+                (e) => this.reviveDates(e, ["timestamp"])
+              )
+            };
+          }
+          if (parsed && typeof parsed === "object" && parsed.v === 1) {
+            const envelope = parsed;
+            return {
+              version: envelope.version || 1,
+              resubmissionCount: envelope.resubmissionCount || 0,
+              taxIdFull: envelope.taxIdFull,
+              reasonCode: envelope.reasonCode,
+              verifiedCountryCode: envelope.verifiedCountryCode,
+              customerNotifications: (envelope.customerNotifications || []).map(
+                (n) => this.reviveDates(n, ["timestamp"])
+              ),
+              externalVerification: envelope.externalVerification ? this.reviveDates(
+                envelope.externalVerification,
+                ["receivedAt"]
+              ) : void 0,
+              reviewHistory: (envelope.events || []).map(
+                (e) => this.reviveDates(e, ["timestamp"])
+              )
+            };
+          }
+        } catch {
+        }
+        return {
+          version: 1,
+          resubmissionCount: 0,
+          customerNotifications: [],
+          reviewHistory: []
+        };
+      }
+      profileFromPrismaRow(row) {
+        let residentialAddress;
+        if (row.residentialAddress) {
+          try {
+            residentialAddress = JSON.parse(row.residentialAddress);
+          } catch {
+            residentialAddress = void 0;
+          }
+        }
+        const docs = this.parseJsonArray(row.documentRefs).map(
+          (d) => this.reviveDates(d, ["uploadedAt"])
+        );
+        const extras = this.decodeReviewHistory(row.reviewHistory);
+        return {
+          id: row.id,
+          userId: row.userId,
+          tier: row.tier,
+          status: row.status,
+          version: extras.version,
+          resubmissionCount: extras.resubmissionCount,
+          legalFirstName: row.legalFirstName ?? void 0,
+          legalLastName: row.legalLastName ?? void 0,
+          dateOfBirth: row.dateOfBirth ?? void 0,
+          taxIdType: row.taxIdType ?? void 0,
+          taxIdMasked: row.taxIdMasked ?? void 0,
+          taxIdFull: extras.taxIdFull,
+          residentialAddress,
+          documentRefs: docs,
+          submittedAt: row.submittedAt ?? void 0,
+          reviewedAt: row.reviewedAt ?? void 0,
+          reviewerUserId: row.reviewerUserId ?? void 0,
+          reviewerNotes: row.reviewerNotes ?? void 0,
+          rejectionReason: row.rejectionReason ?? void 0,
+          reasonCode: extras.reasonCode,
+          reviewHistory: extras.reviewHistory,
+          customerNotifications: extras.customerNotifications,
+          externalVerification: extras.externalVerification,
+          verifiedCountryCode: extras.verifiedCountryCode,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt
+        };
+      }
+      async hydrateFromDatabase() {
+        if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
+          return;
+        }
+        const rows = await prisma.kycProfile.findMany();
+        for (const row of rows) {
+          this.profilesByUserId.set(row.userId, this.profileFromPrismaRow(row));
+        }
+      }
+      async persistProfile(profile) {
+        if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
+          return;
+        }
+        await prisma.kycProfile.upsert({
+          where: { userId: profile.userId },
+          create: {
+            id: profile.id,
+            userId: profile.userId,
+            tier: profile.tier,
+            status: profile.status,
+            legalFirstName: profile.legalFirstName ?? null,
+            legalLastName: profile.legalLastName ?? null,
+            dateOfBirth: profile.dateOfBirth ?? null,
+            taxIdType: profile.taxIdType ?? null,
+            taxIdMasked: profile.taxIdMasked ?? null,
+            residentialAddress: profile.residentialAddress ? JSON.stringify(profile.residentialAddress) : null,
+            documentRefs: JSON.stringify(profile.documentRefs || []),
+            submittedAt: profile.submittedAt ?? null,
+            reviewedAt: profile.reviewedAt ?? null,
+            reviewerUserId: profile.reviewerUserId ?? null,
+            reviewerNotes: profile.reviewerNotes ?? null,
+            rejectionReason: profile.rejectionReason ?? null,
+            reviewHistory: this.encodeReviewHistory(profile),
+            createdAt: profile.createdAt,
+            updatedAt: profile.updatedAt
+          },
+          update: {
+            tier: profile.tier,
+            status: profile.status,
+            legalFirstName: profile.legalFirstName ?? null,
+            legalLastName: profile.legalLastName ?? null,
+            dateOfBirth: profile.dateOfBirth ?? null,
+            taxIdType: profile.taxIdType ?? null,
+            taxIdMasked: profile.taxIdMasked ?? null,
+            residentialAddress: profile.residentialAddress ? JSON.stringify(profile.residentialAddress) : null,
+            documentRefs: JSON.stringify(profile.documentRefs || []),
+            submittedAt: profile.submittedAt ?? null,
+            reviewedAt: profile.reviewedAt ?? null,
+            reviewerUserId: profile.reviewerUserId ?? null,
+            reviewerNotes: profile.reviewerNotes ?? null,
+            rejectionReason: profile.rejectionReason ?? null,
+            reviewHistory: this.encodeReviewHistory(profile),
+            updatedAt: profile.updatedAt
+          }
+        });
+      }
+      persistProfileSoon(profile) {
+        void this.persistProfile(profile).catch(
+          (err) => console.error("[kyc] failed to persist profile:", err)
+        );
+      }
       /**
        * Retrieves or initializes a KYC profile for a user.
        */
@@ -6363,14 +6560,27 @@ var init_kyc_service = __esm({
             createdAt: /* @__PURE__ */ new Date(),
             updatedAt: /* @__PURE__ */ new Date()
           };
+          const user = defaultAuthService.getUserById(userId);
+          if (user?.kycStatus === "APPROVED") {
+            profile.status = "APPROVED";
+            profile.verifiedCountryCode = user.countryCode;
+          } else if (user && (user.kycStatus === "SUBMITTED" || user.kycStatus === "UNDER_REVIEW" || user.kycStatus === "NEEDS_MORE_INFORMATION")) {
+            user.kycStatus = "NOT_STARTED";
+            user.updatedAt = /* @__PURE__ */ new Date();
+            defaultAuthService.syncCustomerActivationFromKyc(userId);
+            defaultAuthService.saveUserSoon(userId);
+            profile.status = "NOT_STARTED";
+          }
           this.profilesByUserId.set(userId, profile);
+          this.persistProfileSoon(profile);
         }
         return profile;
       }
       /**
        * Submits or updates verification details. Customer-facing.
        */
-      submitVerification(params) {
+      async submitVerification(params) {
+        await this.readyPromise;
         const profile = this.getOrCreateProfile(params.userId);
         if (profile.status === "UNDER_REVIEW") {
           throw new Error("Your verification is currently under review by our compliance team.");
@@ -6390,7 +6600,7 @@ var init_kyc_service = __esm({
         const cleanTaxId = params.taxIdNumber.trim();
         const masked = cleanTaxId.length > 4 ? `***-**-${cleanTaxId.slice(-4)}` : "***";
         const newDocRefs = (params.documents || []).map((doc) => {
-          const preview = typeof doc.previewDataUrl === "string" && doc.previewDataUrl.startsWith("data:") && doc.previewDataUrl.length <= 18e5 ? doc.previewDataUrl : void 0;
+          const preview = typeof doc.previewDataUrl === "string" && doc.previewDataUrl.startsWith("data:") && doc.previewDataUrl.length <= 2e5 ? doc.previewDataUrl : void 0;
           return {
             id: `doc_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
             type: doc.type,
@@ -6451,6 +6661,7 @@ var init_kyc_service = __esm({
             })
           );
         }
+        await this.persistProfile(profile);
         return profile;
       }
       /**
@@ -6458,6 +6669,7 @@ var init_kyc_service = __esm({
        * Customers CANNOT invoke this method.
        */
       async reviewProfile(params) {
+        await this.readyPromise;
         const allowedRoles = ["COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"];
         if (!allowedRoles.includes(params.reviewerRole)) {
           throw new Error("Access denied: only compliance officers or administrators can review verification profiles.");
@@ -6605,6 +6817,7 @@ var init_kyc_service = __esm({
               break;
           }
         }
+        await this.persistProfile(profile);
         return profile;
       }
       /**
@@ -6688,6 +6901,7 @@ var init_kyc_service = __esm({
             autoApprovalPrevented: true
           }
         });
+        this.persistProfileSoon(profile);
         return profile;
       }
       validateTaxId(type, value, country) {
@@ -6764,6 +6978,9 @@ var init_auth_service = __esm({
       readyPromise;
       constructor() {
         this.readyPromise = this.bootstrap();
+      }
+      whenReady() {
+        return this.readyPromise;
       }
       async bootstrap() {
         await this.hydrateFromDatabase();
@@ -9592,8 +9809,8 @@ var KycSubmitSchema = import_zod6.z.object({
       fileName: import_zod6.z.string(),
       mimeType: import_zod6.z.string(),
       fileSize: import_zod6.z.number().positive(),
-      /** Optional staff-review preview (data URL). Capped server-side. */
-      previewDataUrl: import_zod6.z.string().startsWith("data:").max(18e5).optional()
+      /** Optional staff-review preview (data URL). Kept small so multi-doc JSON fits Express 1mb. */
+      previewDataUrl: import_zod6.z.string().startsWith("data:").max(2e5).optional()
     })
   ).optional()
 }).superRefine((value, ctx) => {
@@ -9626,10 +9843,11 @@ kycRouter.get("/me", authenticate, (req, res) => {
     profile: defaultKycService.sanitizeForCustomer(profile)
   });
 });
-kycRouter.post("/submit", authenticate, (req, res, next) => {
+kycRouter.post("/submit", authenticate, async (req, res, next) => {
   try {
+    await defaultKycService.whenReady();
     const validated = KycSubmitSchema.parse(req.body);
-    const updated = defaultKycService.submitVerification({
+    const updated = await defaultKycService.submitVerification({
       userId: req.user.id,
       tier: validated.tier,
       legalFirstName: validated.legalFirstName,
@@ -10373,7 +10591,9 @@ var WalletService = class {
   }
   async bootstrap() {
     await defaultLedgerService.whenReady();
+    await defaultAuthService.whenReady();
     await this.hydrateFromDatabase();
+    await this.rebuildPendingQueuesFromLedger();
   }
   async hydrateFromDatabase() {
     const ops = await prisma.walletOperation.findMany({ orderBy: { createdAt: "desc" } });
@@ -10478,6 +10698,81 @@ var WalletService = class {
         isExecuted: q.isExecuted,
         createdAt: q.createdAt
       });
+    }
+  }
+  /**
+   * Ledger hold postings can outlive pending_* rows (serverless cold starts / failed queue writes).
+   * Rebuild APPROVAL queue entries from still-pending hold journal history so Approve/Reject works.
+   */
+  async rebuildPendingQueuesFromLedger() {
+    const existingDepRefs = new Set(this.pendingDeposits.map((d) => d.referenceNumber));
+    const existingWthRefs = new Set(this.pendingWithdrawals.map((w) => w.referenceNumber));
+    const userIds = /* @__PURE__ */ new Set();
+    for (const acc of defaultLedgerService.getAccounts()) {
+      if (acc.userId) userIds.add(acc.userId);
+    }
+    for (const userId of userIds) {
+      for (const tx of this.buildLedgerBackedHistory(userId)) {
+        if (tx.status !== "PENDING_REVIEW" || !tx.userId) continue;
+        const narration = (tx.narration || "").toLowerCase();
+        const isAdminOrigin = (tx.counterparty || "").toLowerCase().includes("admin") || narration.includes("admin funding") || narration.includes("admin debit") || narration.includes("admin adjustment");
+        if (tx.operationType === "SIMULATED_DEPOSIT" && (tx.referenceNumber.startsWith("DEP-HOLD-") || tx.transactionId.includes("_hold") || narration.includes("pending"))) {
+          if (existingDepRefs.has(tx.referenceNumber)) continue;
+          const money = Money.fromMinor(tx.amountMinor, tx.currency);
+          const record = {
+            id: `dep_rebuild_${tx.journalEntryId}`,
+            userId: tx.userId,
+            kind: "FIAT",
+            currency: tx.currency,
+            amountDecimal: money.toDecimalString(),
+            amountMinor: tx.amountMinor,
+            formattedAmount: tx.formattedAmount,
+            sourceRail: isAdminOrigin ? "ADMIN_FUNDING" : void 0,
+            submittedAt: new Date(tx.timestamp),
+            status: "PENDING_REVIEW",
+            holdJournalEntryId: tx.journalEntryId,
+            referenceNumber: tx.referenceNumber,
+            origin: isAdminOrigin ? "ADMIN" : "CUSTOMER",
+            initiationReason: isAdminOrigin ? "Admin funding credit (restored from ledger hold)" : "Deposit hold restored from ledger"
+          };
+          this.pendingDeposits.push(record);
+          existingDepRefs.add(record.referenceNumber);
+          try {
+            await this.persistPendingDeposit(record);
+          } catch (err) {
+            console.error("[wallet] failed to persist rebuilt pending deposit:", err);
+          }
+          continue;
+        }
+        if (tx.operationType === "SIMULATED_WITHDRAWAL" && (tx.referenceNumber.startsWith("WTH-HOLD-") || tx.transactionId.includes("_hold") || narration.includes("pending"))) {
+          if (existingWthRefs.has(tx.referenceNumber)) continue;
+          const money = Money.fromMinor(tx.amountMinor, tx.currency);
+          const record = {
+            id: `wth_rebuild_${tx.journalEntryId}`,
+            userId: tx.userId,
+            kind: "FIAT",
+            currency: tx.currency,
+            amountDecimal: money.toDecimalString(),
+            amountMinor: tx.amountMinor,
+            formattedAmount: tx.formattedAmount,
+            destinationRail: isAdminOrigin ? "ADMIN_ADJUSTMENT" : void 0,
+            bankingDetails: {},
+            submittedAt: new Date(tx.timestamp),
+            status: "PENDING_REVIEW",
+            holdJournalEntryId: tx.journalEntryId,
+            referenceNumber: tx.referenceNumber,
+            origin: isAdminOrigin ? "ADMIN" : "CUSTOMER",
+            initiationReason: isAdminOrigin ? "Admin funding debit (restored from ledger hold)" : "Withdrawal hold restored from ledger"
+          };
+          this.pendingWithdrawals.push(record);
+          existingWthRefs.add(record.referenceNumber);
+          try {
+            await this.persistPendingWithdrawal(record);
+          } catch (err) {
+            console.error("[wallet] failed to persist rebuilt pending withdrawal:", err);
+          }
+        }
+      }
     }
   }
   async persistWalletOperation(tx) {
@@ -15849,6 +16144,7 @@ adminRouter.get(
   async (req, res, next) => {
     try {
       const user = req.user;
+      await defaultKycService.whenReady();
       const usersData = await defaultAuthService.getAllUsersForAdmin({
         actorRole: user.role,
         roleFilter: "CUSTOMER",
@@ -16173,8 +16469,9 @@ adminRouter.get(
   "/kyc/queue",
   authenticate,
   requireRoles(["COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"]),
-  (req, res, next) => {
+  async (req, res, next) => {
     try {
+      await defaultKycService.whenReady();
       const { status } = req.query;
       let profiles = defaultKycService.getAllProfilesForReview(req.user.role);
       if (status && status !== "ALL") {

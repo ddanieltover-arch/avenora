@@ -95,11 +95,19 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
   setReversalReason,
   handleReverseTransaction,
 }) => {
+  const pendingDepositByRef = new Map(
+    pendingDeposits.map((d) => [d.referenceNumber, d] as const),
+  );
+  const pendingWithdrawalByRef = new Map(
+    pendingWithdrawals.map((w) => [w.referenceNumber, w] as const),
+  );
+  const pendingFundingCount = pendingDeposits.length + pendingWithdrawals.length;
+
   return (
     <div className="space-y-6">
                 <AdminPageHeader
               title="Transaction Investigation & Reversals"
-              subtitle="Approve pending deposit and withdrawal funding holds, inspect transaction state transitions and journal entries, and reverse erroneous postings via compensating entries."
+              subtitle="Approve or reject pending deposit and withdrawal funding holds in the amber/blue queues below (or on matching PENDING_REVIEW rows). Queue admin credits/debits from Customer Management → customer profile → Funding adjustment."
               actions={
                 <AdminButton variant="secondary" onClick={fetchTransactions}>
                   <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -108,11 +116,34 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
               }
             />
 
+                {pendingFundingCount > 0 && (
+                  <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 flex flex-wrap items-center justify-between gap-2">
+                    <span>
+                      <strong>{pendingFundingCount}</strong> funding item
+                      {pendingFundingCount === 1 ? '' : 's'} awaiting Approve / Reject
+                      {pendingDeposits.length > 0
+                        ? ` (${pendingDeposits.length} deposit${pendingDeposits.length === 1 ? '' : 's'}`
+                        : ''}
+                      {pendingDeposits.length > 0 && pendingWithdrawals.length > 0 ? ', ' : ''}
+                      {pendingWithdrawals.length > 0
+                        ? `${pendingDeposits.length === 0 ? ' (' : ''}${pendingWithdrawals.length} withdrawal${pendingWithdrawals.length === 1 ? '' : 's'}`
+                        : ''}
+                      {pendingDeposits.length + pendingWithdrawals.length > 0 ? ')' : ''}
+                    </span>
+                    <span className="text-xs font-semibold text-amber-800">Use the queues below or row actions</span>
+                  </div>
+                )}
+
                 {/* Pending deposit holds */}
                 <div className="bg-white rounded-xl border border-amber-200/80 p-5 shadow-xs">
                   <h3 className="font-serif font-bold text-base text-brand-deep mb-1 flex items-center gap-2">
                     <DollarSign className="w-4 h-4 text-amber-600" />
                     <span>Pending wallet deposits (customer hold)</span>
+                    {pendingDeposits.length > 0 && (
+                      <span className="ml-1 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-900">
+                        {pendingDeposits.length}
+                      </span>
+                    )}
                   </h3>
                   <p className="text-xs text-brand-muted mb-4">
                     Approve to move funds from Hold to available balance. Reject to clear the hold without crediting available funds.
@@ -216,6 +247,11 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
                   <h3 className="font-serif font-bold text-base text-brand-deep mb-1 flex items-center gap-2">
                     <ArrowUpRight className="w-4 h-4 text-brand-primary" />
                     <span>Pending wallet withdrawals (reserved on hold)</span>
+                    {pendingWithdrawals.length > 0 && (
+                      <span className="ml-1 inline-flex items-center rounded-full bg-brand-primary/10 px-2 py-0.5 text-[11px] font-bold text-brand-deep">
+                        {pendingWithdrawals.length}
+                      </span>
+                    )}
                   </h3>
                   <p className="text-xs text-brand-muted mb-4">
                     Approve to pay out to the customer&apos;s destination and clear hold. Reject to return funds to available balance.
@@ -395,7 +431,69 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
                                 {new Date(tx.timestamp).toLocaleString()}
                               </AdminTd>
                               <AdminTd className="text-right">
-                                <div className="flex items-center justify-end gap-1.5">
+                                <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                                  {(() => {
+                                    const pendingDep = pendingDepositByRef.get(tx.referenceNumber);
+                                    const pendingWth = pendingWithdrawalByRef.get(tx.referenceNumber);
+                                    if (tx.status !== 'PENDING_REVIEW') return null;
+                                    if (pendingDep) {
+                                      return (
+                                        <>
+                                          <AdminButton
+                                            type="button"
+                                            size="sm"
+                                            variant="success"
+                                            onClick={() => approvePendingDeposit(pendingDep.id)}
+                                          >
+                                            Approve
+                                          </AdminButton>
+                                          <AdminButton
+                                            type="button"
+                                            size="sm"
+                                            variant="danger"
+                                            onClick={() => {
+                                              setDepositRejectId(pendingDep.id);
+                                              setDepositRejectReason('');
+                                              setWithdrawalRejectId(null);
+                                            }}
+                                          >
+                                            Reject
+                                          </AdminButton>
+                                        </>
+                                      );
+                                    }
+                                    if (pendingWth) {
+                                      return (
+                                        <>
+                                          <AdminButton
+                                            type="button"
+                                            size="sm"
+                                            variant="success"
+                                            onClick={() => approvePendingWithdrawal(pendingWth.id)}
+                                          >
+                                            Approve
+                                          </AdminButton>
+                                          <AdminButton
+                                            type="button"
+                                            size="sm"
+                                            variant="danger"
+                                            onClick={() => {
+                                              setWithdrawalRejectId(pendingWth.id);
+                                              setWithdrawalRejectReason('');
+                                              setDepositRejectId(null);
+                                            }}
+                                          >
+                                            Reject
+                                          </AdminButton>
+                                        </>
+                                      );
+                                    }
+                                    return (
+                                      <span className="text-[10px] text-amber-700 max-w-[8rem] text-right">
+                                        Refresh to load approval queue
+                                      </span>
+                                    );
+                                  })()}
                                   <button
                                     onClick={() => inspectTransaction(tx.transactionId)}
                                     title="Inspect double-entry journal & ledger lines"

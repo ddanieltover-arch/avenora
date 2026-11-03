@@ -53,8 +53,8 @@ describe('KYC-gated domestic account generation', () => {
     return reg.user;
   }
 
-  function submitKycUs(userId: string, country: string) {
-    kyc.submitVerification({
+  async function submitKycUs(userId: string, country: string) {
+    await kyc.submitVerification({
       userId,
       legalFirstName: 'Test',
       legalLastName: 'User',
@@ -72,7 +72,7 @@ describe('KYC-gated domestic account generation', () => {
 
   it('does not generate before KYC approval', async () => {
     const user = await registerCustomer('US', 'pre');
-    submitKycUs(user.id, 'US');
+    await submitKycUs(user.id, 'US');
     const profile = kyc.getOrCreateProfile(user.id);
     const record = await domestic.ensurePrimaryAccountAfterKycApproval({ userId: user.id, kycProfile: profile });
     expect(record.generationStatus).toBe('NOT_ELIGIBLE');
@@ -81,7 +81,7 @@ describe('KYC-gated domestic account generation', () => {
 
   it('generates US routing/account after compliance approval', async () => {
     const user = await registerCustomer('US', 'us');
-    submitKycUs(user.id, 'US');
+    await submitKycUs(user.id, 'US');
     const authUser = auth.getUserById(user.id)!;
     authUser.kycStatus = 'APPROVED';
     const profile = kyc.getOrCreateProfile(user.id);
@@ -102,7 +102,7 @@ describe('KYC-gated domestic account generation', () => {
 
   it('blocks generation when signup and KYC countries conflict', async () => {
     const user = await registerCustomer('US', 'mismatch');
-    submitKycUs(user.id, 'US');
+    await submitKycUs(user.id, 'US');
     auth.getUserById(user.id)!.kycStatus = 'APPROVED';
     const profile = kyc.getOrCreateProfile(user.id);
     profile.status = 'APPROVED';

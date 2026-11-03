@@ -110,6 +110,7 @@ adminRouter.get(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const user = req.user!;
+      await defaultKycService.whenReady();
 
       // 1. Customers (CUSTOMER role only — never count staff as customers)
       const usersData = await defaultAuthService.getAllUsersForAdmin({
@@ -513,8 +514,9 @@ adminRouter.get(
   '/kyc/queue',
   authenticate,
   requireRoles(['COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN']),
-  (req: Request, res: Response, next: NextFunction): void => {
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      await defaultKycService.whenReady();
       const { status } = req.query;
       let profiles = defaultKycService.getAllProfilesForReview(req.user!.role);
 

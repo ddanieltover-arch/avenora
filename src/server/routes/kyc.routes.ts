@@ -95,10 +95,11 @@ kycRouter.get('/me', authenticate, (req: Request, res: Response) => {
  * Customer submission for identity verification.
  */
 /** KYC submit must remain available while the account is PENDING_VERIFICATION / inactive. */
-kycRouter.post('/submit', authenticate, (req: Request, res: Response, next: NextFunction) => {
+kycRouter.post('/submit', authenticate, async (req: Request, res: Response, next: NextFunction) => {
   try {
+    await defaultKycService.whenReady();
     const validated = KycSubmitSchema.parse(req.body);
-    const updated = defaultKycService.submitVerification({
+    const updated = await defaultKycService.submitVerification({
       userId: req.user!.id,
       tier: validated.tier,
       legalFirstName: validated.legalFirstName,

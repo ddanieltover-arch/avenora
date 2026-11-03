@@ -137,14 +137,18 @@ function enforcePreviewBudget(documents: KycSubmitDocument[]): KycSubmitDocument
     let largestIdx = -1;
     let largestLen = 0;
     for (let i = 0; i < next.length; i += 1) {
-      const len = next[i].previewDataUrl?.length ?? 0;
+      const doc = next[i];
+      if (!doc) continue;
+      const len = doc.previewDataUrl?.length ?? 0;
       if (len > largestLen) {
         largestLen = len;
         largestIdx = i;
       }
     }
     if (largestIdx < 0 || largestLen === 0) break;
-    const { previewDataUrl: _omit, ...rest } = next[largestIdx];
+    const largest = next[largestIdx];
+    if (!largest) break;
+    const { previewDataUrl: _omit, ...rest } = largest;
     next[largestIdx] = rest;
   }
 
