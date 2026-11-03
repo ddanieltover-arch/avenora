@@ -38,8 +38,6 @@ export interface AdminCustomersSectionProps {
   customers: any[];
   customerSearch: string;
   setCustomerSearch: (v: string) => void;
-  customerRoleFilter: string;
-  setCustomerRoleFilter: (v: string) => void;
   customerStatusFilter: string;
   setCustomerStatusFilter: (v: string) => void;
   fetchCustomers: () => void;
@@ -82,8 +80,6 @@ export const AdminCustomersSection: React.FC<AdminCustomersSectionProps> = ({
   customers,
   customerSearch,
   setCustomerSearch,
-  customerRoleFilter,
-  setCustomerRoleFilter,
   customerStatusFilter,
   setCustomerStatusFilter,
   fetchCustomers,
@@ -147,21 +143,6 @@ export const AdminCustomersSection: React.FC<AdminCustomersSectionProps> = ({
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <select
-                      value={customerRoleFilter}
-                      onChange={(e) => {
-                        setCustomerRoleFilter(e.target.value);
-                      }}
-                      className={adminSelectClass}
-                    >
-                      <option value="ALL">All Roles</option>
-                      <option value="CUSTOMER">Customer</option>
-                      <option value="SUPPORT">Support Specialist</option>
-                      <option value="COMPLIANCE_REVIEWER">Compliance Reviewer</option>
-                      <option value="ADMIN">Admin</option>
-                      <option value="SUPER_ADMIN">Super Admin</option>
-                    </select>
-
                     <select
                       value={customerStatusFilter}
                       onChange={(e) => {

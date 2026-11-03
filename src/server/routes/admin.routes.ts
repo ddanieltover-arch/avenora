@@ -111,8 +111,12 @@ adminRouter.get(
     try {
       const user = req.user!;
 
-      // 1. Customers
-      const usersData = await defaultAuthService.getAllUsersForAdmin({ actorRole: user.role, limit: 1000 });
+      // 1. Customers (CUSTOMER role only — never count staff as customers)
+      const usersData = await defaultAuthService.getAllUsersForAdmin({
+        actorRole: user.role,
+        roleFilter: 'CUSTOMER',
+        limit: 1000,
+      });
       const totalUsers = usersData.total;
       const activeUsers = usersData.users.filter((u) => u.status === 'ACTIVE').length;
       const suspendedUsers = usersData.users.filter((u) => u.status === 'SUSPENDED').length;
@@ -273,11 +277,12 @@ adminRouter.get(
   requireRoles(['SUPPORT', 'COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN']),
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { search, role, status, kycStatus, limit, offset } = req.query;
+      const { search, status, kycStatus, limit, offset } = req.query;
+      // Customer Management is CUSTOMER-only; ignore any client role query.
       const result = await defaultAuthService.getAllUsersForAdmin({
         actorRole: req.user!.role,
         search: search ? String(search) : undefined,
-        roleFilter: role ? String(role) : undefined,
+        roleFilter: 'CUSTOMER',
         statusFilter: status ? String(status) : undefined,
         kycFilter: kycStatus ? String(kycStatus) : undefined,
         limit: limit ? parseInt(String(limit), 10) : 50,
@@ -304,7 +309,7 @@ adminRouter.get(
     try {
       const customerId = req.params.id!;
       const user = defaultAuthService.getUserById(customerId);
-      if (!user) {
+      if (!user || user.role !== 'CUSTOMER') {
         res.status(404).json({
           type: 'https://avenora.com/errors/not-found',
           title: 'Customer Not Found',

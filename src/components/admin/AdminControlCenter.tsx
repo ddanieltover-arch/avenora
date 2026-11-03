@@ -77,7 +77,6 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
   // Customer Management Data
   const [customers, setCustomers] = useState<any[]>([]);
   const [customerSearch, setCustomerSearch] = useState('');
-  const [customerRoleFilter, setCustomerRoleFilter] = useState('ALL');
   const [customerStatusFilter, setCustomerStatusFilter] = useState('ALL');
   const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
   const [statusModalCustomer, setStatusModalCustomer] = useState<any | null>(null);
@@ -176,7 +175,6 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       setLoading(true);
       const params = new URLSearchParams();
       if (customerSearch) params.set('search', customerSearch);
-      if (customerRoleFilter !== 'ALL') params.set('role', customerRoleFilter);
       if (customerStatusFilter !== 'ALL') params.set('status', customerStatusFilter);
 
       const res = await fetch(`/api/v1/admin/customers?${params.toString()}`, {
@@ -1102,8 +1100,6 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
                     customers={customers}
                     customerSearch={customerSearch}
                     setCustomerSearch={setCustomerSearch}
-                    customerRoleFilter={customerRoleFilter}
-                    setCustomerRoleFilter={setCustomerRoleFilter}
                     customerStatusFilter={customerStatusFilter}
                     setCustomerStatusFilter={setCustomerStatusFilter}
                     fetchCustomers={fetchCustomers}
