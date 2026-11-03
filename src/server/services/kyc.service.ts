@@ -253,6 +253,7 @@ export class KycService {
       user.kycStatus = 'SUBMITTED';
       user.updatedAt = new Date();
       defaultAuthService.syncCustomerActivationFromKyc(params.userId);
+      defaultAuthService.saveUserSoon(params.userId);
 
       const customerName =
         `${params.legalFirstName} ${params.legalLastName}`.trim() || user.fullName;
@@ -390,6 +391,7 @@ export class KycService {
       user.kycStatus = params.decision;
       user.updatedAt = new Date();
       defaultAuthService.syncCustomerActivationFromKyc(params.targetUserId);
+      defaultAuthService.saveUserSoon(params.targetUserId);
     }
 
     // Log to durable audit trail

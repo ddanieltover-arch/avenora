@@ -14,11 +14,12 @@
     "test:watch": "vitest",
     "start": "node server.ts",
     "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev"
+    "db:migrate": "prisma migrate deploy",
+    "db:migrate:dev": "prisma migrate dev"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
-    "@prisma/client": "^7.10.0",
+    "@prisma/client": "^6.19.0",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.1",
     "cookie-parser": "^1.4.7",
@@ -42,7 +43,7 @@
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.28.0",
-    "prisma": "^8.0.0-rc.22",
+    "prisma": "^6.19.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",

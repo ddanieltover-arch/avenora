@@ -11,6 +11,8 @@
  * - Brute-force rate limiting and account lockout guards
  */
 
+import type { KycStatus as PrismaKycStatus, User as PrismaUser, UserRole as PrismaUserRole, UserStatus as PrismaUserStatus } from '@prisma/client';
+import { prisma } from '../db/prisma.ts';
 import { SecurityService } from './security.service.ts';
 import { defaultLedgerService } from './ledger.service.ts';
 import { defaultAuditService } from './audit.service.ts';
@@ -94,18 +96,162 @@ export class AuthService {
   private readyPromise: Promise<void>;
 
   constructor() {
-    this.readyPromise = this.seedPrimaryAdminAccount();
+    this.readyPromise = this.bootstrap();
+  }
+
+  private async bootstrap(): Promise<void> {
+    await this.hydrateFromDatabase();
+    await this.seedPrimaryAdminAccount();
+  }
+
+  private userFromPrisma(row: PrismaUser): UserRecord {
+    let mfaRecoveryCodes: string[] | undefined;
+    if (row.mfaRecoveryCodes) {
+      try {
+        const parsed = JSON.parse(row.mfaRecoveryCodes);
+        if (Array.isArray(parsed)) {
+          mfaRecoveryCodes = parsed.filter((c): c is string => typeof c === 'string');
+        }
+      } catch {
+        mfaRecoveryCodes = undefined;
+      }
+    }
+    return {
+      id: row.id,
+      email: row.email,
+      passwordHash: row.passwordHash,
+      fullName: row.fullName,
+      phoneNumber: row.phoneNumber || '',
+      transactionPinHash: row.transactionPinHash || '',
+      countryCode: row.countryCode,
+      role: row.role as UserRole,
+      status: row.status as UserStatus,
+      kycStatus: row.kycStatus as KycStatus,
+      mfaEnabled: row.mfaEnabled,
+      mfaSecret: row.mfaSecret ?? undefined,
+      mfaRecoveryCodes,
+      failedLoginAttempts: row.failedLoginAttempts,
+      lockedUntil: row.lockedUntil ?? undefined,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  private cachePutUser(user: UserRecord): void {
+    this.usersByEmail.set(user.email.toLowerCase(), user);
+    this.usersById.set(user.id, user);
+  }
+
+  private async persistUserCreate(user: UserRecord): Promise<void> {
+    await prisma.user.create({
+      data: {
+        id: user.id,
+        email: user.email.toLowerCase(),
+        passwordHash: user.passwordHash,
+        fullName: user.fullName,
+        phoneNumber: user.phoneNumber,
+        transactionPinHash: user.transactionPinHash,
+        countryCode: user.countryCode,
+        role: user.role as PrismaUserRole,
+        status: user.status as PrismaUserStatus,
+        kycStatus: user.kycStatus as PrismaKycStatus,
+        mfaEnabled: user.mfaEnabled,
+        mfaSecret: user.mfaSecret ?? null,
+        mfaRecoveryCodes: user.mfaRecoveryCodes ? JSON.stringify(user.mfaRecoveryCodes) : null,
+        failedLoginAttempts: user.failedLoginAttempts,
+        lockedUntil: user.lockedUntil ?? null,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      },
+    });
+  }
+
+  private async persistUserUpdate(user: UserRecord): Promise<void> {
+    user.updatedAt = new Date();
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        email: user.email.toLowerCase(),
+        passwordHash: user.passwordHash,
+        fullName: user.fullName,
+        phoneNumber: user.phoneNumber,
+        transactionPinHash: user.transactionPinHash,
+        countryCode: user.countryCode,
+        role: user.role as PrismaUserRole,
+        status: user.status as PrismaUserStatus,
+        kycStatus: user.kycStatus as PrismaKycStatus,
+        mfaEnabled: user.mfaEnabled,
+        mfaSecret: user.mfaSecret ?? null,
+        mfaRecoveryCodes: user.mfaRecoveryCodes ? JSON.stringify(user.mfaRecoveryCodes) : null,
+        failedLoginAttempts: user.failedLoginAttempts,
+        lockedUntil: user.lockedUntil ?? null,
+        updatedAt: user.updatedAt,
+      },
+    });
+    this.cachePutUser(user);
+  }
+
+  private async hydrateFromDatabase(): Promise<void> {
+    const users = await prisma.user.findMany();
+    for (const row of users) {
+      this.cachePutUser(this.userFromPrisma(row));
+    }
+
+    const sessions = await prisma.session.findMany({
+      where: {
+        isRevoked: false,
+        expiresAt: { gt: new Date() },
+      },
+    });
+    for (const row of sessions) {
+      const session: SessionRecord = {
+        id: row.id,
+        userId: row.userId,
+        tokenHash: row.tokenHash,
+        ipAddress: row.ipAddress ?? undefined,
+        userAgent: row.userAgent ?? undefined,
+        isRevoked: row.isRevoked,
+        transactionPinUnlocked: row.transactionPinUnlocked,
+        expiresAt: row.expiresAt,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      };
+      this.sessionsByTokenHash.set(session.tokenHash, session);
+    }
+
+    const resetTokens = await prisma.passwordResetToken.findMany({
+      where: {
+        isUsed: false,
+        expiresAt: { gt: new Date() },
+      },
+    });
+    for (const row of resetTokens) {
+      const record: PasswordResetTokenRecord = {
+        id: row.id,
+        userId: row.userId,
+        tokenHash: row.tokenHash,
+        isUsed: row.isUsed,
+        expiresAt: row.expiresAt,
+        createdAt: row.createdAt,
+      };
+      this.resetTokensByHash.set(record.tokenHash, record);
+    }
   }
 
   /** Single operational admin for local / prototype control-center access. */
   private async seedPrimaryAdminAccount(): Promise<void> {
     const email = 'support@avenorabank.com';
+    const existing = await prisma.user.findUnique({ where: { email } });
+    if (existing) {
+      this.cachePutUser(this.userFromPrisma(existing));
+      return;
+    }
     if (this.usersByEmail.has(email)) {
       return;
     }
     const passwordHash = await SecurityService.hashPassword('AvenoraPassword2026!');
     const transactionPinHash = await SecurityService.hashPassword('1234');
-    this.createUserInternal({
+    const user = this.createUserInternal({
       id: 'usr_staff_support_admin_01',
       email,
       passwordHash,
@@ -119,6 +265,7 @@ export class AuthService {
       mfaEnabled: true,
       mfaSecret: 'JBSWY3DPEHPK3PXP',
     });
+    await this.persistUserCreate(user);
   }
 
   /**
@@ -133,65 +280,74 @@ export class AuthService {
     const hash = await SecurityService.hashPassword(defaultPassword);
     const defaultPinHash = await SecurityService.hashPassword('1234');
 
-    this.createUserInternal({
-      id: 'usr_staff_support_01',
-      email: 'support.lead@avenora.internal',
-      passwordHash: hash,
-      fullName: 'Elena Rostova (Support)',
-      phoneNumber: '12025550200',
-      transactionPinHash: defaultPinHash,
-      countryCode: 'US',
-      role: 'SUPPORT',
-      status: 'ACTIVE',
-      kycStatus: 'APPROVED',
-      mfaEnabled: true,
-      mfaSecret: 'JBSWY3DPEHPK3PXP',
-    });
+    const staff: Array<Omit<UserRecord, 'failedLoginAttempts' | 'createdAt' | 'updatedAt'>> = [
+      {
+        id: 'usr_staff_support_01',
+        email: 'support.lead@avenora.internal',
+        passwordHash: hash,
+        fullName: 'Elena Rostova (Support)',
+        phoneNumber: '12025550200',
+        transactionPinHash: defaultPinHash,
+        countryCode: 'US',
+        role: 'SUPPORT',
+        status: 'ACTIVE',
+        kycStatus: 'APPROVED',
+        mfaEnabled: true,
+        mfaSecret: 'JBSWY3DPEHPK3PXP',
+      },
+      {
+        id: 'usr_staff_compliance_01',
+        email: 'compliance.lead@avenora.internal',
+        passwordHash: hash,
+        fullName: 'Maria Chen (Compliance)',
+        phoneNumber: '12025550201',
+        transactionPinHash: defaultPinHash,
+        countryCode: 'US',
+        role: 'COMPLIANCE_REVIEWER',
+        status: 'ACTIVE',
+        kycStatus: 'APPROVED',
+        mfaEnabled: true,
+        mfaSecret: 'JBSWY3DPEHPK3PXP',
+      },
+      {
+        id: 'usr_staff_ops_admin_01',
+        email: 'admin.ops@avenora.internal',
+        passwordHash: hash,
+        fullName: 'Marcus Sterling (Ops Admin)',
+        phoneNumber: '12025550202',
+        transactionPinHash: defaultPinHash,
+        countryCode: 'US',
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        kycStatus: 'APPROVED',
+        mfaEnabled: true,
+        mfaSecret: 'JBSWY3DPEHPK3PXP',
+      },
+      {
+        id: 'usr_staff_admin_01',
+        email: 'admin.super@avenora.internal',
+        passwordHash: hash,
+        fullName: 'David Thorne (Super Admin)',
+        phoneNumber: '12025550203',
+        transactionPinHash: defaultPinHash,
+        countryCode: 'US',
+        role: 'SUPER_ADMIN',
+        status: 'ACTIVE',
+        kycStatus: 'APPROVED',
+        mfaEnabled: true,
+        mfaSecret: 'JBSWY3DPEHPK3PXP',
+      },
+    ];
 
-    this.createUserInternal({
-      id: 'usr_staff_compliance_01',
-      email: 'compliance.lead@avenora.internal',
-      passwordHash: hash,
-      fullName: 'Maria Chen (Compliance)',
-      phoneNumber: '12025550201',
-      transactionPinHash: defaultPinHash,
-      countryCode: 'US',
-      role: 'COMPLIANCE_REVIEWER',
-      status: 'ACTIVE',
-      kycStatus: 'APPROVED',
-      mfaEnabled: true,
-      mfaSecret: 'JBSWY3DPEHPK3PXP',
-    });
-
-    this.createUserInternal({
-      id: 'usr_staff_ops_admin_01',
-      email: 'admin.ops@avenora.internal',
-      passwordHash: hash,
-      fullName: 'Marcus Sterling (Ops Admin)',
-      phoneNumber: '12025550202',
-      transactionPinHash: defaultPinHash,
-      countryCode: 'US',
-      role: 'ADMIN',
-      status: 'ACTIVE',
-      kycStatus: 'APPROVED',
-      mfaEnabled: true,
-      mfaSecret: 'JBSWY3DPEHPK3PXP',
-    });
-
-    this.createUserInternal({
-      id: 'usr_staff_admin_01',
-      email: 'admin.super@avenora.internal',
-      passwordHash: hash,
-      fullName: 'David Thorne (Super Admin)',
-      phoneNumber: '12025550203',
-      transactionPinHash: defaultPinHash,
-      countryCode: 'US',
-      role: 'SUPER_ADMIN',
-      status: 'ACTIVE',
-      kycStatus: 'APPROVED',
-      mfaEnabled: true,
-      mfaSecret: 'JBSWY3DPEHPK3PXP',
-    });
+    for (const entry of staff) {
+      const existing = await prisma.user.findUnique({ where: { email: entry.email } });
+      if (existing) {
+        this.cachePutUser(this.userFromPrisma(existing));
+        continue;
+      }
+      const user = this.createUserInternal(entry);
+      await this.persistUserCreate(user);
+    }
   }
 
   private createUserInternal(user: Omit<UserRecord, 'failedLoginAttempts' | 'createdAt' | 'updatedAt'>): UserRecord {
@@ -201,8 +357,7 @@ export class AuthService {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-    this.usersByEmail.set(user.email.toLowerCase(), fullRecord);
-    this.usersById.set(user.id, fullRecord);
+    this.cachePutUser(fullRecord);
     return fullRecord;
   }
 
@@ -257,6 +412,14 @@ export class AuthService {
       kycStatus: isKycBypassEnabled() ? 'APPROVED' : 'NOT_STARTED',
       mfaEnabled: false,
     });
+
+    try {
+      await this.persistUserCreate(user);
+    } catch (err) {
+      this.usersByEmail.delete(emailNorm);
+      this.usersById.delete(userId);
+      throw err;
+    }
 
     // Automatically provision user's personal chart of account liabilities in the ledger
     defaultLedgerService.provisionCustomerAccounts(userId, user.fullName, user.countryCode);
@@ -317,12 +480,14 @@ export class AuthService {
           }),
         );
       }
+      await this.persistUserUpdate(user);
       throw genericAuthError;
     }
 
     // Password is valid - reset failed attempts
     user.failedLoginAttempts = 0;
     user.lockedUntil = undefined;
+    await this.persistUserUpdate(user);
 
     // SUSPENDED / LOCKED users may still authenticate (browse / see notices).
     // Financial operations are blocked separately via requireTransactionEligible.
@@ -342,13 +507,14 @@ export class AuthService {
           profile.updatedAt = new Date();
           const { defaultDomesticBankAccountService } = await import('./domesticBankAccount.service.ts');
           defaultDomesticBankAccountService.clearPrimaryAccountForUser(user.id);
+          await this.persistUserUpdate(user);
         }
-        this.syncCustomerActivationFromKyc(user.id);
+        await this.syncCustomerActivationFromKycAsync(user.id);
       } catch {
         /* non-blocking */
       }
     } else if (!isKycBypassEnabled() && user.role === 'CUSTOMER') {
-      this.syncCustomerActivationFromKyc(user.id);
+      await this.syncCustomerActivationFromKycAsync(user.id);
     }
 
     // MFA Check
@@ -375,6 +541,7 @@ export class AuthService {
         }
         // Consume single-use recovery code
         user.mfaRecoveryCodes?.splice(codeIndex, 1);
+        await this.persistUserUpdate(user);
       }
     }
 
@@ -426,6 +593,13 @@ export class AuthService {
 
     if (session.expiresAt < new Date()) {
       session.isRevoked = true;
+      session.updatedAt = new Date();
+      void prisma.session
+        .updateMany({
+          where: { tokenHash },
+          data: { isRevoked: true, updatedAt: session.updatedAt },
+        })
+        .catch((err) => console.error('[auth] failed to revoke expired session:', err));
       return null;
     }
 
@@ -448,8 +622,17 @@ export class AuthService {
     const session = this.sessionsByTokenHash.get(tokenHash);
     if (session) {
       session.isRevoked = true;
+      session.updatedAt = new Date();
+      await prisma.session.updateMany({
+        where: { tokenHash },
+        data: { isRevoked: true, updatedAt: session.updatedAt },
+      });
       return true;
     }
+    await prisma.session.updateMany({
+      where: { tokenHash },
+      data: { isRevoked: true, updatedAt: new Date() },
+    });
     return false;
   }
 
@@ -460,8 +643,13 @@ export class AuthService {
     for (const session of this.sessionsByTokenHash.values()) {
       if (session.userId === userId) {
         session.isRevoked = true;
+        session.updatedAt = new Date();
       }
     }
+    await prisma.session.updateMany({
+      where: { userId, isRevoked: false },
+      data: { isRevoked: true, updatedAt: new Date() },
+    });
   }
 
   /**
@@ -490,6 +678,16 @@ export class AuthService {
     };
 
     this.resetTokensByHash.set(tokenHash, record);
+    await prisma.passwordResetToken.create({
+      data: {
+        id: record.id,
+        userId: record.userId,
+        tokenHash: record.tokenHash,
+        isUsed: false,
+        expiresAt: record.expiresAt,
+        createdAt: record.createdAt,
+      },
+    });
 
     const emailResult = await defaultEmailService.sendPasswordResetEmail({
       to: user.email,
@@ -530,10 +728,14 @@ export class AuthService {
 
     // Mark single-use token as used immediately
     resetRecord.isUsed = true;
+    await prisma.passwordResetToken.update({
+      where: { id: resetRecord.id },
+      data: { isUsed: true },
+    });
 
     // Update password
     user.passwordHash = await SecurityService.hashPassword(newPassword);
-    user.updatedAt = new Date();
+    await this.persistUserUpdate(user);
 
     // Invalidate all existing sessions to enforce security hygiene
     await this.revokeAllUserSessions(user.id);
@@ -566,7 +768,7 @@ export class AuthService {
     }
 
     user.passwordHash = await SecurityService.hashPassword(newPassword);
-    user.updatedAt = new Date();
+    await this.persistUserUpdate(user);
 
     voidEmail(
       'password-changed',
@@ -607,7 +809,7 @@ export class AuthService {
     user.mfaEnabled = true;
     user.mfaSecret = secret;
     user.mfaRecoveryCodes = hashedCodes;
-    user.updatedAt = new Date();
+    await this.persistUserUpdate(user);
 
     voidEmail(
       'mfa-enrolled',
@@ -624,6 +826,19 @@ export class AuthService {
     return this.usersById.get(id);
   }
 
+  /** Persist a cached user row to Neon (call after mutating kycStatus/status outside AuthService). */
+  public async saveUser(userId: string): Promise<void> {
+    const user = this.usersById.get(userId);
+    if (!user) return;
+    await this.persistUserUpdate(user);
+  }
+
+  public saveUserSoon(userId: string): void {
+    void this.saveUser(userId).catch((err) =>
+      console.error('[auth] failed to persist user:', userId, err),
+    );
+  }
+
   /**
    * Keeps customer account activation aligned with KYC approval.
    * - APPROVED → ACTIVE (transactions permitted)
@@ -636,10 +851,17 @@ export class AuthService {
     if (user.status === 'SUSPENDED' || user.status === 'LOCKED') {
       return user.status;
     }
+    let changed = false;
     if (isKycBypassEnabled() && user.kycStatus === 'APPROVED') {
       if (user.status !== 'ACTIVE') {
         user.status = 'ACTIVE';
         user.updatedAt = new Date();
+        changed = true;
+      }
+      if (changed) {
+        void this.persistUserUpdate(user).catch((err) =>
+          console.error('[auth] failed to persist KYC activation:', err),
+        );
       }
       return user.status;
     }
@@ -649,6 +871,7 @@ export class AuthService {
     if (user.status !== nextStatus) {
       user.status = nextStatus;
       user.updatedAt = new Date();
+      changed = true;
       if (nextStatus === 'PENDING_VERIFICATION' && prevStatus === 'ACTIVE') {
         voidEmail(
           'pending-verification',
@@ -659,7 +882,17 @@ export class AuthService {
         );
       }
     }
+    if (changed) {
+      void this.persistUserUpdate(user).catch((err) =>
+        console.error('[auth] failed to persist KYC activation:', err),
+      );
+    }
     return user.status;
+  }
+
+  private async syncCustomerActivationFromKycAsync(userId: string): Promise<UserStatus | undefined> {
+    // syncCustomerActivationFromKyc schedules a durable write; await a tick so callers can continue after cache update.
+    return this.syncCustomerActivationFromKyc(userId);
   }
 
   /** Resolve a customer by email (case-insensitive) or internal user id. */
@@ -716,6 +949,10 @@ export class AuthService {
 
     session.transactionPinUnlocked = true;
     session.updatedAt = new Date();
+    await prisma.session.update({
+      where: { id: session.id },
+      data: { transactionPinUnlocked: true, updatedAt: session.updatedAt },
+    });
     return { transactionPinUnlocked: true };
   }
 
@@ -760,12 +997,13 @@ export class AuthService {
           }),
         );
       }
+      await this.persistUserUpdate(user);
       throw new Error('Invalid transaction PIN.');
     }
 
     user.failedLoginAttempts = 0;
     user.lockedUntil = undefined;
-    user.updatedAt = new Date();
+    await this.persistUserUpdate(user);
   }
 
   private async createSession(
@@ -791,6 +1029,21 @@ export class AuthService {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
+
+    await prisma.session.create({
+      data: {
+        id: session.id,
+        userId: session.userId,
+        tokenHash: session.tokenHash,
+        ipAddress: session.ipAddress ?? null,
+        userAgent: session.userAgent ?? null,
+        isRevoked: false,
+        transactionPinUnlocked,
+        expiresAt: session.expiresAt,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      },
+    });
 
     this.sessionsByTokenHash.set(tokenHash, session);
 
@@ -897,16 +1150,12 @@ export class AuthService {
 
     const prevStatus = targetUser.status;
     targetUser.status = params.newStatus;
-    targetUser.updatedAt = new Date();
+    await this.persistUserUpdate(targetUser);
 
     // LOCKED: force re-authentication so the lockout modal is shown on next login.
     // SUSPENDED: keep sessions so the customer stays signed in with a freeze notice.
     if (params.newStatus === 'LOCKED') {
-      for (const session of this.sessionsByTokenHash.values()) {
-        if (session.userId === targetUser.id) {
-          session.isRevoked = true;
-        }
-      }
+      await this.revokeAllUserSessions(targetUser.id);
     }
 
     // Append to durable audit trail
@@ -1000,7 +1249,7 @@ export class AuthService {
 
     const prevRole = targetUser.role;
     targetUser.role = params.newRole;
-    targetUser.updatedAt = new Date();
+    await this.persistUserUpdate(targetUser);
 
     // Log to durable audit trail
     defaultAuditService.logAction({
@@ -1090,8 +1339,15 @@ export class AuthService {
       }
     }
 
+    await prisma.user.delete({ where: { id: targetUser.id } });
+
     this.usersByEmail.delete(email.toLowerCase());
     this.usersById.delete(targetUser.id);
+    for (const [hash, session] of this.sessionsByTokenHash.entries()) {
+      if (session.userId === params.targetUserId) {
+        this.sessionsByTokenHash.delete(hash);
+      }
+    }
 
     defaultAuditService.logAction({
       action: 'USER_DELETED',

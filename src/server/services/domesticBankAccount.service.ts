@@ -184,6 +184,7 @@ export class DomesticBankAccountService {
       if (user.kycStatus !== 'APPROVED') {
         user.kycStatus = 'APPROVED';
         user.updatedAt = new Date();
+        defaultAuthService.saveUserSoon(user.id);
       }
     }
 
