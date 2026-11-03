@@ -157,16 +157,16 @@ describe('Customer Identity, Sessions & MFA Services', () => {
     expect(loginResult.requiresMfa).toBe(false);
     expect(loginResult.authResult?.transactionPinUnlocked).toBe(false);
     const sessionToken = loginResult.authResult!.sessionToken;
-    expect(authService.isTransactionPinUnlocked(sessionToken)).toBe(false);
+    expect(await authService.isTransactionPinUnlocked(sessionToken)).toBe(false);
 
     await expect(
       authService.unlockSessionWithTransactionPin(sessionToken, '9999'),
     ).rejects.toThrow(/Invalid transaction PIN/);
-    expect(authService.isTransactionPinUnlocked(sessionToken)).toBe(false);
+    expect(await authService.isTransactionPinUnlocked(sessionToken)).toBe(false);
 
     const unlocked = await authService.unlockSessionWithTransactionPin(sessionToken, pin);
     expect(unlocked.transactionPinUnlocked).toBe(true);
-    expect(authService.isTransactionPinUnlocked(sessionToken)).toBe(true);
+    expect(await authService.isTransactionPinUnlocked(sessionToken)).toBe(true);
   });
 
   it('auto-unlocks transaction PIN on registration session', async () => {
@@ -177,7 +177,7 @@ describe('Customer Identity, Sessions & MFA Services', () => {
       ...registrationExtras,
     });
     expect(result.transactionPinUnlocked).toBe(true);
-    expect(authService.isTransactionPinUnlocked(result.sessionToken)).toBe(true);
+    expect(await authService.isTransactionPinUnlocked(result.sessionToken)).toBe(true);
   });
 
   it('verifies transaction PIN for money-move checks without changing unlock state', async () => {
@@ -197,10 +197,10 @@ describe('Customer Identity, Sessions & MFA Services', () => {
       password: 'SecurePassword2026!',
     });
     const lockedToken = login.authResult!.sessionToken;
-    expect(authService.isTransactionPinUnlocked(lockedToken)).toBe(false);
+    expect(await authService.isTransactionPinUnlocked(lockedToken)).toBe(false);
 
     await authService.verifyTransactionPinForUser(user.id, '2468');
-    expect(authService.isTransactionPinUnlocked(lockedToken)).toBe(false);
+    expect(await authService.isTransactionPinUnlocked(lockedToken)).toBe(false);
 
     await expect(authService.verifyTransactionPinForUser(user.id, '0000')).rejects.toThrow(
       /Invalid transaction PIN/,

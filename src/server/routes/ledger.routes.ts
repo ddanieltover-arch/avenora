@@ -80,7 +80,7 @@ ledgerRouter.get('/verify-invariant', (_req: Request, res: Response) => {
 /**
  * POST /api/v1/ledger/entries
  */
-ledgerRouter.post('/entries', (req: Request, res: Response, next: NextFunction) => {
+ledgerRouter.post('/entries', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const validated = PostEntrySchema.parse(req.body);
 
@@ -99,7 +99,7 @@ ledgerRouter.post('/entries', (req: Request, res: Response, next: NextFunction) 
       return;
     }
 
-    const created = defaultLedgerService.postJournalEntry({
+    const created = await defaultLedgerService.postJournalEntryDurable({
       transactionId: validated.transactionId,
       currency: validated.currency,
       narration: validated.narration,

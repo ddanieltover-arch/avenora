@@ -466,6 +466,30 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
     }
   };
 
+  const refreshAfterMoneyMutation = async (affectedUserId?: string) => {
+    await fetchPendingDeposits();
+    await fetchPendingWithdrawals();
+    try {
+      const params = new URLSearchParams();
+      if (txSearch) params.set('search', txSearch);
+      if (txStatusFilter !== 'ALL') params.set('status', txStatusFilter);
+      const res = await fetch(`/api/v1/admin/transactions?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setTransactions(data.transactions || []);
+      }
+    } catch {
+      /* non-fatal */
+    }
+    void fetchOverview();
+    const openCustomerId = selectedCustomer?.customer?.id as string | undefined;
+    if (affectedUserId && openCustomerId && affectedUserId === openCustomerId) {
+      await inspectCustomer(openCustomerId);
+    }
+  };
+
   const approvePendingDeposit = async (depositId: string) => {
     if (!token) return;
     try {
@@ -481,7 +505,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       const data = await res.json();
       if (res.ok) {
         setSuccessNotice('Deposit approved — funds released from hold to customer available balance.');
-        await fetchPendingDeposits();
+        await refreshAfterMoneyMutation(data.deposit?.userId || data.userId);
       } else {
         showError(data.detail || data.title || 'Could not approve deposit.');
       }
@@ -507,7 +531,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
         setSuccessNotice('Deposit rejected — hold amount removed from customer wallet.');
         setDepositRejectId(null);
         setDepositRejectReason('');
-        await fetchPendingDeposits();
+        await refreshAfterMoneyMutation(data.deposit?.userId || data.userId);
       } else {
         showError(data.detail || data.title || 'Could not reject deposit.');
       }
@@ -546,7 +570,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       const data = await res.json();
       if (res.ok) {
         setSuccessNotice('Withdrawal approved — payout recorded and hold cleared.');
-        await fetchPendingWithdrawals();
+        await refreshAfterMoneyMutation(data.withdrawal?.userId || data.userId);
       } else {
         showError(data.detail || data.title || 'Could not approve withdrawal.');
       }
@@ -572,7 +596,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
         setSuccessNotice('Withdrawal rejected — amount returned from hold to available balance.');
         setWithdrawalRejectId(null);
         setWithdrawalRejectReason('');
-        await fetchPendingWithdrawals();
+        await refreshAfterMoneyMutation(data.withdrawal?.userId || data.userId);
       } else {
         showError(data.detail || data.title || 'Could not reject withdrawal.');
       }
@@ -956,13 +980,13 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
   }, [authLoading, user, token]);
 
   if (authLoading && !user) {
-    return (
+  return (
       <div className="app-viewport-shell bg-brand-warm text-brand-dark font-sans flex items-center justify-center">
         <div className="flex items-center gap-3 text-sm text-brand-muted">
           <RefreshCw className="w-4 h-4 animate-spin text-brand-primary" />
           Checking secure session…
+          </div>
         </div>
-      </div>
     );
   }
 
@@ -985,19 +1009,19 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
             <div className="flex items-center gap-2.5">
               <AvenoraLogo size="sm" className="rounded-lg bg-white/95 p-0.5 shadow-sm" />
               <span className="font-serif font-bold text-sm tracking-tight text-white">
-                AVENORA ADMIN & OPS
-              </span>
-            </div>
-            <button
-              type="button"
+                    AVENORA ADMIN & OPS
+                  </span>
+                </div>
+                    <button
+                      type="button"
               onClick={onBackToPublic}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-700/60 hover:bg-emerald-800/50 text-xs font-semibold text-emerald-100 transition cursor-pointer"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
               Public site
-            </button>
-          </div>
-        </header>
+          </button>
+        </div>
+      </header>
 
         <main className="flex-1 flex items-center justify-center px-4 py-16">
           <div className="w-full max-w-md text-center space-y-5">
@@ -1009,17 +1033,17 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
               <p className="text-sm text-brand-muted leading-relaxed">
                 Your account ({user.email}) is signed in as {user.role}. Admin & Ops is limited to
                 SUPPORT, COMPLIANCE_REVIEWER, ADMIN, and SUPER_ADMIN.
-              </p>
-            </div>
+                </p>
+              </div>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-2">
               <AdminButton onClick={() => logout()}>Sign out and switch account</AdminButton>
               <AdminButton variant="secondary" onClick={onBackToPortal}>
                 Customer portal
               </AdminButton>
             </div>
-          </div>
+                </div>
         </main>
-      </div>
+                </div>
     );
   }
 
@@ -1030,9 +1054,9 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
           <ShieldAlert className="w-3.5 h-3.5 text-brand-gold shrink-0" />
           <span className="font-medium truncate">
             Operations control center — monitor customers, compliance queues, and platform health.
-          </span>
-        </div>
-      </div>
+                  </span>
+                </div>
+              </div>
 
       <div className="flex flex-1 min-h-0">
         <AdminSidebar
@@ -1055,7 +1079,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
 
           <div className="hidden lg:block">
             <AdminButtonNav activeTab={activeTab} onTabChange={onTabChange} />
-          </div>
+            </div>
 
           <main className="app-scroll-pane flex-1">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-4 portal-mobile-main lg:!pb-6">
@@ -1068,8 +1092,8 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
                   <div className="flex-1">{errorNotice}</div>
                   <button type="button" className="font-bold cursor-pointer" onClick={() => setErrorNotice(null)}>
                     Dismiss
-                  </button>
-                </div>
+                              </button>
+                            </div>
               )}
               {successNotice && (
                 <div
@@ -1080,9 +1104,9 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
                   <div className="flex-1">{successNotice}</div>
                   <button type="button" className="font-bold cursor-pointer" onClick={() => setSuccessNotice(null)}>
                     Dismiss
-                  </button>
-                </div>
-              )}
+                    </button>
+                      </div>
+                    )}
 
               <div role="tabpanel" aria-label={activeTab}>
                 {activeTab === 'overview' && (
@@ -1136,7 +1160,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
                     handleFundingAdjustment={handleFundingAdjustment}
                   />
                 )}
-                {activeTab === 'kyc' && (
+        {activeTab === 'kyc' && (
                   <AdminKycSection
                     user={user}
                     loading={loading}
@@ -1154,7 +1178,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
                     handleKycReviewSubmit={handleKycReviewSubmit}
                   />
                 )}
-                {activeTab === 'transactions' && (
+        {activeTab === 'transactions' && (
                   <AdminTransactionsSection
                     user={user}
                     loading={loading}
@@ -1188,7 +1212,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
                     handleReverseTransaction={handleReverseTransaction}
                   />
                 )}
-                {activeTab === 'loans_grants' && (
+        {activeTab === 'loans_grants' && (
                   <AdminLoansGrantsSection
                     user={user}
                     loading={loading}
@@ -1213,7 +1237,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
                     handleSimulateGrantDisburse={handleSimulateGrantDisburse}
                   />
                 )}
-                {activeTab === 'cards' && (
+        {activeTab === 'cards' && (
                   <AdminCardsSection
                     loading={loading}
                     cards={cards}
@@ -1235,7 +1259,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
                     handleUpdateCardStatus={handleUpdateCardStatus}
                   />
                 )}
-                {activeTab === 'audit' && (
+        {activeTab === 'audit' && (
                   <AdminAuditSection
                     loading={loading}
                     auditLogs={auditLogs}
@@ -1250,8 +1274,8 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
               </div>
             </div>
           </main>
-        </div>
-      </div>
+          </div>
+            </div>
 
       <AdminBottomNav activeTab={activeTab} onTabChange={onTabChange} />
     </div>

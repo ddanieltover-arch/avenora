@@ -180,12 +180,12 @@ cardRouter.patch('/:id/limits', authenticate, requireTransactionEligible, (req: 
 /**
  * POST /api/v1/cards/:id/simulate-auth
  */
-cardRouter.post('/:id/simulate-auth', authenticate, requireTransactionEligible, (req: Request, res: Response, next: NextFunction): void => {
+cardRouter.post('/:id/simulate-auth', authenticate, requireTransactionEligible, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const cardId = req.params.id!;
     const validated = SimulateAuthSchema.parse(req.body);
 
-    const result = defaultCardService.simulateAuthorization({
+    const result = await defaultCardService.simulateAuthorization({
       cardId,
       merchantName: validated.merchantName,
       mcc: validated.mcc,
@@ -207,11 +207,11 @@ cardRouter.post('/:id/simulate-auth', authenticate, requireTransactionEligible, 
 /**
  * POST /api/v1/cards/authorizations/:authId/settle
  */
-cardRouter.post('/authorizations/:authId/settle', authenticate, requireTransactionEligible, (req: Request, res: Response, next: NextFunction): void => {
+cardRouter.post('/authorizations/:authId/settle', authenticate, requireTransactionEligible, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const user = req.user!;
     const authId = req.params.authId!;
-    const result = defaultCardService.simulateSettlement({
+    const result = await defaultCardService.simulateSettlement({
       authorizationId: authId,
       actorUserId: user.id,
     });
@@ -229,12 +229,12 @@ cardRouter.post('/authorizations/:authId/settle', authenticate, requireTransacti
 /**
  * POST /api/v1/cards/authorizations/:authId/release
  */
-cardRouter.post('/authorizations/:authId/release', authenticate, requireTransactionEligible, (req: Request, res: Response, next: NextFunction): void => {
+cardRouter.post('/authorizations/:authId/release', authenticate, requireTransactionEligible, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const user = req.user!;
     const authId = req.params.authId!;
     const reason = req.body?.reason ? String(req.body.reason) : 'Customer or merchant requested hold release';
-    const result = defaultCardService.simulateReleaseOrReversal({
+    const result = await defaultCardService.simulateReleaseOrReversal({
       authorizationId: authId,
       actorUserId: user.id,
       reason,

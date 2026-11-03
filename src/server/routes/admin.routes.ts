@@ -654,10 +654,10 @@ adminRouter.post(
   '/deposits/:depositId/approve',
   authenticate,
   requireRoles(['SUPPORT', 'COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN']),
-  (req: Request, res: Response, next: NextFunction): void => {
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const validated = DepositApproveSchema.parse(req.body ?? {});
-      const updated = defaultWalletService.approvePendingDeposit({
+      const updated = await defaultWalletService.approvePendingDeposit({
         depositId: req.params.depositId!,
         actorUserId: req.user!.id,
         actorRole: req.user!.role,
@@ -681,10 +681,10 @@ adminRouter.post(
   '/deposits/:depositId/reject',
   authenticate,
   requireRoles(['SUPPORT', 'COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN']),
-  (req: Request, res: Response, next: NextFunction): void => {
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const validated = DepositRejectSchema.parse(req.body ?? {});
-      const updated = defaultWalletService.rejectPendingDeposit({
+      const updated = await defaultWalletService.rejectPendingDeposit({
         depositId: req.params.depositId!,
         actorUserId: req.user!.id,
         actorRole: req.user!.role,
@@ -743,10 +743,10 @@ adminRouter.post(
   '/withdrawals/:withdrawalId/approve',
   authenticate,
   requireRoles(['SUPPORT', 'COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN']),
-  (req: Request, res: Response, next: NextFunction): void => {
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const validated = WithdrawalApproveSchema.parse(req.body ?? {});
-      const updated = defaultWalletService.approvePendingWithdrawal({
+      const updated = await defaultWalletService.approvePendingWithdrawal({
         withdrawalId: req.params.withdrawalId!,
         actorUserId: req.user!.id,
         actorRole: req.user!.role,
@@ -770,10 +770,10 @@ adminRouter.post(
   '/withdrawals/:withdrawalId/reject',
   authenticate,
   requireRoles(['SUPPORT', 'COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN']),
-  (req: Request, res: Response, next: NextFunction): void => {
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const validated = WithdrawalRejectSchema.parse(req.body ?? {});
-      const updated = defaultWalletService.rejectPendingWithdrawal({
+      const updated = await defaultWalletService.rejectPendingWithdrawal({
         withdrawalId: req.params.withdrawalId!,
         actorUserId: req.user!.id,
         actorRole: req.user!.role,
@@ -891,12 +891,12 @@ adminRouter.post(
   '/transactions/:id/reverse',
   authenticate,
   requireRoles(['ADMIN', 'SUPER_ADMIN']),
-  (req: Request, res: Response, next: NextFunction): void => {
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const txId = req.params.id!;
       const validated = ReverseTransactionSchema.parse(req.body);
 
-      const result = defaultWalletService.reverseTransaction({
+      const result = await defaultWalletService.reverseTransaction({
         transactionId: txId,
         actorUserId: req.user!.id,
         actorRole: req.user!.role,
@@ -930,12 +930,12 @@ adminRouter.post(
   '/providers/payments/:id/reconcile',
   authenticate,
   requireRoles(['COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN']),
-  (req: Request, res: Response, next: NextFunction): void => {
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const paymentId = req.params.id!;
       const validated = ResolveReconciliationSchema.parse(req.body);
 
-      const result = defaultProviderPaymentService.resolveReconciliation({
+      const result = await defaultProviderPaymentService.resolveReconciliation({
         paymentId,
         resolution: validated.resolution,
         reason: validated.reason,

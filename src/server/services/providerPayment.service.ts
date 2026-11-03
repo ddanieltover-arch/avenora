@@ -199,7 +199,7 @@ export class ProviderPaymentService {
    * LEDGER SAFETY: Posts an immutable, balanced double-entry journal entry!
    * Idempotent: If already CONFIRMED, deduplicates and skips posting a second entry.
    */
-  public processProviderConfirmation(params: {
+  public async processProviderConfirmation(params: {
     paymentId: string;
     externalReference: string;
     correlationId: string;
@@ -243,7 +243,7 @@ export class ProviderPaymentService {
     const prevStatus = payment.status;
 
     // LEDGER INVARIANT: Post balanced double-entry transaction
-    const journalEntry = defaultLedgerService.postJournalEntry({
+    const journalEntry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: payment.id,
       currency: payment.currency,
       narration: `Provider Settled Transfer ${payment.id} (Ref: ${params.externalReference})`,
@@ -386,7 +386,7 @@ export class ProviderPaymentService {
    * State: REVERSED.
    * LEDGER SAFETY: Posts an immutable compensating entry (swapping debit and credit).
    */
-  public reversePayment(params: {
+  public async reversePayment(params: {
     paymentId: string;
     reason: string;
     actorUserId: string;
@@ -406,7 +406,7 @@ export class ProviderPaymentService {
     const prevStatus = payment.status;
 
     // Post compensating reversal in ledger: swaps debit and credit to balance back out
-    const reversalEntry = defaultLedgerService.postJournalEntry({
+    const reversalEntry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: `tx_rev_${payment.id}`,
       currency: payment.currency,
       narration: `Compensating Reversal for Payment ${payment.id}: ${params.reason}`,
@@ -463,7 +463,7 @@ export class ProviderPaymentService {
    * Resolves a payment currently in RECONCILIATION_REQUIRED status.
    * Audited administrative operation ensuring ledger balance invariants.
    */
-  public resolveReconciliation(params: {
+  public async resolveReconciliation(params: {
     paymentId: string;
     resolution: 'CONFIRMED' | 'FAILED' | 'REVERSED';
     reason: string;
@@ -488,7 +488,7 @@ export class ProviderPaymentService {
 
     if (params.resolution === 'CONFIRMED') {
       if (!payment.ledgerJournalEntryId && params.debtorAccount && params.creditorAccount) {
-        const journalEntry = defaultLedgerService.postJournalEntry({
+        const journalEntry = await defaultLedgerService.postJournalEntryDurable({
           transactionId: payment.id,
           currency: payment.currency,
           narration: `Reconciliation Settlement: ${payment.id} - ${params.reason}`,
@@ -512,7 +512,7 @@ export class ProviderPaymentService {
       payment.status = 'CONFIRMED';
     } else if (params.resolution === 'REVERSED') {
       if (payment.ledgerJournalEntryId && params.debtorAccount && params.creditorAccount) {
-        const reversalEntry = defaultLedgerService.postJournalEntry({
+        const reversalEntry = await defaultLedgerService.postJournalEntryDurable({
           transactionId: `tx_rev_${payment.id}`,
           currency: payment.currency,
           narration: `Compensating Reversal for Reconciled Payment ${payment.id}: ${params.reason}`,

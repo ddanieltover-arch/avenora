@@ -215,6 +215,34 @@ export const WalletView: React.FC<WalletViewProps> = ({
   }, [token, allowedCurrencies.join(',')]);
 
   useEffect(() => {
+    if (!token) return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void fetchWallet();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
+  }, [token, allowedCurrencies.join(',')]);
+
+  useEffect(() => {
+    if (!token) return;
+    const hasHold = accounts.some((a) => {
+      const hold = Number(a.pendingHoldMinor || 0);
+      return Number.isFinite(hold) && hold > 0;
+    });
+    if (!hasHold) return;
+    const id = window.setInterval(() => {
+      void fetchWallet().then(() => onWalletActivity?.());
+    }, 8000);
+    return () => window.clearInterval(id);
+  }, [token, accounts, onWalletActivity]);
+
+  useEffect(() => {
     setOpCurrency(primaryFiat);
     setFxSrcCurrency(primaryFiat);
     setFxDestCurrency('BTC');

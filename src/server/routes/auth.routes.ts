@@ -269,15 +269,19 @@ authRouter.post('/logout', authenticate, async (req: Request, res: Response, nex
 /**
  * GET /api/v1/auth/me
  */
-authRouter.get('/me', authenticate, (req: Request, res: Response) => {
-  if (!req.user) {
-    res.status(401).json({ error: 'Unauthorized' });
-    return;
+authRouter.get('/me', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    res.json({
+      user: defaultAuthService.sanitizeUser(req.user),
+      transactionPinUnlocked: await defaultAuthService.isTransactionPinUnlocked(req.sessionToken!),
+    });
+  } catch (err) {
+    next(err);
   }
-  res.json({
-    user: defaultAuthService.sanitizeUser(req.user),
-    transactionPinUnlocked: defaultAuthService.isTransactionPinUnlocked(req.sessionToken!),
-  });
 });
 
 /**

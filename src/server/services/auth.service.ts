@@ -421,8 +421,8 @@ export class AuthService {
       throw err;
     }
 
-    // Automatically provision user's personal chart of account liabilities in the ledger
-    defaultLedgerService.provisionCustomerAccounts(userId, user.fullName, user.countryCode);
+    // Automatically provision user's personal chart of account liabilities in the ledger (Neon + cache)
+    await defaultLedgerService.provisionCustomerAccountsDurable(userId, user.fullName, user.countryCode);
 
     // Best-effort welcome email — never block registration
     void defaultEmailService
@@ -552,29 +552,78 @@ export class AuthService {
 
     // Create session (with session rotation)
     const authResult = await this.createSession(user, params.ipAddress, params.userAgent);
-    const signedInAt = new Date().toISOString();
-    voidEmail(
-      'login-success',
-      defaultEmailService.sendLoginSuccessEmail({
-        to: user.email,
-        fullName: user.fullName,
-        ipAddress: params.ipAddress,
-        signedInAt,
-      }),
-    );
-    if (isNewDevice) {
+
+    // Staff / admin logins do not receive customer login notification emails
+    const isStaffLogin =
+      user.role === 'SUPPORT' ||
+      user.role === 'COMPLIANCE_REVIEWER' ||
+      user.role === 'ADMIN' ||
+      user.role === 'SUPER_ADMIN';
+    if (!isStaffLogin) {
+      const signedInAt = new Date().toISOString();
       voidEmail(
-        'login-new-device',
-        defaultEmailService.sendLoginNewDeviceEmail({
+        'login-success',
+        defaultEmailService.sendLoginSuccessEmail({
           to: user.email,
           fullName: user.fullName,
           ipAddress: params.ipAddress,
-          userAgent: params.userAgent,
           signedInAt,
         }),
       );
+      if (isNewDevice) {
+        voidEmail(
+          'login-new-device',
+          defaultEmailService.sendLoginNewDeviceEmail({
+            to: user.email,
+            fullName: user.fullName,
+            ipAddress: params.ipAddress,
+            userAgent: params.userAgent,
+            signedInAt,
+          }),
+        );
+      }
     }
     return { requiresMfa: false, authResult };
+  }
+
+  /**
+   * Resolve a session from the in-memory map, falling back to Postgres so
+   * serverless instances that did not create the session still accept it.
+   */
+  private async resolveSessionByTokenHash(tokenHash: string): Promise<SessionRecord | null> {
+    const cached = this.sessionsByTokenHash.get(tokenHash);
+    if (cached) return cached;
+
+    const row = await prisma.session.findUnique({ where: { tokenHash } });
+    if (!row) return null;
+
+    const session: SessionRecord = {
+      id: row.id,
+      userId: row.userId,
+      tokenHash: row.tokenHash,
+      ipAddress: row.ipAddress ?? undefined,
+      userAgent: row.userAgent ?? undefined,
+      isRevoked: row.isRevoked,
+      transactionPinUnlocked: row.transactionPinUnlocked,
+      expiresAt: row.expiresAt,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+    this.sessionsByTokenHash.set(tokenHash, session);
+    return session;
+  }
+
+  /** Resolve a user from cache, falling back to Postgres when needed. */
+  private async resolveUserById(userId: string): Promise<UserRecord | null> {
+    const cached = this.usersById.get(userId);
+    if (cached) return cached;
+
+    const row = await prisma.user.findUnique({ where: { id: userId } });
+    if (!row) return null;
+
+    const user = this.userFromPrisma(row);
+    this.cachePutUser(user);
+    return user;
   }
 
   /**
@@ -585,7 +634,7 @@ export class AuthService {
     await this.readyPromise;
 
     const tokenHash = SecurityService.hashToken(sessionToken);
-    const session = this.sessionsByTokenHash.get(tokenHash);
+    const session = await this.resolveSessionByTokenHash(tokenHash);
 
     if (!session) return null;
 
@@ -603,7 +652,7 @@ export class AuthService {
       return null;
     }
 
-    const user = this.usersById.get(session.userId);
+    const user = await this.resolveUserById(session.userId);
     if (!user) {
       return null;
     }
@@ -912,10 +961,11 @@ export class AuthService {
   }
 
   /** Returns whether the current session has completed post-login PIN unlock. */
-  public isTransactionPinUnlocked(sessionToken: string): boolean {
+  public async isTransactionPinUnlocked(sessionToken: string): Promise<boolean> {
     if (!sessionToken) return false;
+    await this.readyPromise;
     const tokenHash = SecurityService.hashToken(sessionToken);
-    const session = this.sessionsByTokenHash.get(tokenHash);
+    const session = await this.resolveSessionByTokenHash(tokenHash);
     if (!session || session.isRevoked || session.expiresAt < new Date()) return false;
     return session.transactionPinUnlocked === true;
   }
@@ -935,12 +985,12 @@ export class AuthService {
     }
 
     const tokenHash = SecurityService.hashToken(sessionToken);
-    const session = this.sessionsByTokenHash.get(tokenHash);
+    const session = await this.resolveSessionByTokenHash(tokenHash);
     if (!session || session.isRevoked || session.expiresAt < new Date()) {
       throw new Error('Invalid or expired session.');
     }
 
-    const user = this.usersById.get(session.userId);
+    const user = await this.resolveUserById(session.userId);
     if (!user) {
       throw new Error('Invalid or expired session.');
     }
@@ -966,7 +1016,7 @@ export class AuthService {
       throw new Error('Transaction PIN must be exactly 4 digits.');
     }
 
-    const user = this.usersById.get(userId);
+    const user = await this.resolveUserById(userId);
     if (!user) {
       throw new Error('Invalid transaction PIN.');
     }

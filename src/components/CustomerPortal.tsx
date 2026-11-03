@@ -110,7 +110,8 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ activeTab, onTab
   }, [token, refreshUser]);
 
   useEffect(() => {
-    if (activeTab === 'overview' && token) {
+    if (!token) return;
+    if (activeTab === 'overview' || activeTab === 'wallets' || activeTab === 'transactions') {
       refetchDashboard();
     }
   }, [activeTab, token, refetchDashboard]);
@@ -185,6 +186,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ activeTab, onTab
         <TransactionsView
           initialSearchQuery={pendingTxSearch}
           onInitialSearchConsumed={() => setPendingTxSearch(null)}
+          onActivity={refetchDashboard}
         />
       )}
       {activeTab === 'cards' && <CardManagementView />}

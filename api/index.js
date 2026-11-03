@@ -222,7 +222,17 @@ function getValidatedConfig(customEnv) {
   if (cachedEnv && !customEnv) {
     return cachedEnv;
   }
-  const rawEnv = customEnv ?? (typeof process !== "undefined" ? process.env : {});
+  const rawEnv = { ...customEnv ?? (typeof process !== "undefined" ? process.env : {}) };
+  const appUrl2 = typeof rawEnv.APP_URL === "string" ? rawEnv.APP_URL.trim() : "";
+  const appUrlIsLocal = !appUrl2 || /^(https?:\/\/)?(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(appUrl2);
+  if (appUrlIsLocal) {
+    const vercelHost = rawEnv.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+    if (vercelHost && !/localhost|127\.0\.0\.1/i.test(vercelHost)) {
+      rawEnv.APP_URL = `https://${vercelHost.replace(/^https?:\/\//i, "").replace(/\/$/, "")}`;
+    } else if (rawEnv.VERCEL === "1" || rawEnv.NODE_ENV === "production") {
+      rawEnv.APP_URL = "https://avenorabank.com";
+    }
+  }
   const parsed = EnvSchema.safeParse(rawEnv);
   if (!parsed.success) {
     const errorDetails = JSON.stringify(parsed.error.format(), null, 2);
@@ -677,6 +687,20 @@ var init_countryPrimaryCurrency = __esm({
   }
 });
 
+// src/server/db/prisma.ts
+var import_client, globalForPrisma, prisma;
+var init_prisma = __esm({
+  "src/server/db/prisma.ts"() {
+    "use strict";
+    import_client = require("@prisma/client");
+    globalForPrisma = globalThis;
+    prisma = globalForPrisma.__avenoraPrisma ?? new import_client.PrismaClient({
+      log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"]
+    });
+    globalForPrisma.__avenoraPrisma = prisma;
+  }
+});
+
 // src/server/services/ledger.service.ts
 var LedgerService, defaultLedgerService;
 var init_ledger_service = __esm({
@@ -686,14 +710,58 @@ var init_ledger_service = __esm({
     init_LedgerInvariant();
     init_Money();
     init_countryPrimaryCurrency();
+    init_prisma();
     LedgerService = class {
       accounts = /* @__PURE__ */ new Map();
       entries = [];
+      readyPromise;
       constructor() {
-        this.seedDefaultAccounts();
-        this.seedBaselineJournalEntries();
+        this.readyPromise = this.bootstrap();
       }
-      seedDefaultAccounts() {
+      whenReady() {
+        return this.readyPromise;
+      }
+      async bootstrap() {
+        await this.hydrateFromDatabase();
+        await this.ensureSystemSeedPersisted();
+      }
+      async hydrateFromDatabase() {
+        const dbAccounts = await prisma.ledgerAccount.findMany();
+        for (const row of dbAccounts) {
+          this.accounts.set(row.id, {
+            id: row.id,
+            accountNumber: row.accountNumber,
+            name: row.name,
+            type: row.type,
+            classification: row.classification,
+            currency: row.currency,
+            userId: row.userId ?? void 0,
+            isActive: row.isActive,
+            isFrozen: row.isFrozen,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt
+          });
+        }
+        const journals = await prisma.journalEntry.findMany({
+          include: { lines: true },
+          orderBy: [{ postedAt: "asc" }, { entrySequence: "asc" }]
+        });
+        this.entries = journals.map((j) => ({
+          id: j.id,
+          transactionId: j.transactionId,
+          entrySequence: j.entrySequence,
+          currency: j.currency,
+          narration: j.narration,
+          postedAt: j.postedAt,
+          lines: j.lines.map((l) => ({
+            accountId: l.accountId,
+            direction: l.direction,
+            amountMinor: l.amountMinor,
+            description: l.description ?? void 0
+          }))
+        }));
+      }
+      buildDefaultAccounts() {
         const defaultAccounts = Object.entries(SYSTEM_CHART_OF_ACCOUNTS).map(([key, acc]) => ({
           id: `acc_${key.toLowerCase()}`,
           accountNumber: acc.accountNumber,
@@ -706,10 +774,7 @@ var init_ledger_service = __esm({
           createdAt: /* @__PURE__ */ new Date("2026-01-01T00:00:00Z"),
           updatedAt: /* @__PURE__ */ new Date("2026-01-01T00:00:00Z")
         }));
-        for (const acc of defaultAccounts) {
-          this.accounts.set(acc.id, acc);
-        }
-        this.accounts.set("acc_equity_reserve_usd", {
+        defaultAccounts.push({
           id: "acc_equity_reserve_usd",
           accountNumber: "3010-USD-EQUITY-CAPITAL",
           name: "Tier-1 Capital & Statutory Reserves",
@@ -721,9 +786,10 @@ var init_ledger_service = __esm({
           createdAt: /* @__PURE__ */ new Date("2026-01-01T00:00:00Z"),
           updatedAt: /* @__PURE__ */ new Date("2026-01-01T00:00:00Z")
         });
+        return defaultAccounts;
       }
-      seedBaselineJournalEntries() {
-        const capEntry = {
+      baselineCapitalEntry() {
+        return {
           id: "je_cap_001",
           transactionId: "tx_init_capital_2026",
           entrySequence: 1,
@@ -735,20 +801,105 @@ var init_ledger_service = __esm({
               accountId: "acc_safeguarding_cash_usd",
               direction: "DEBIT",
               amountMinor: 50000000n,
-              // $500,000.00
               description: "Funds received in safeguarding treasury account"
             },
             {
               accountId: "acc_equity_reserve_usd",
               direction: "CREDIT",
               amountMinor: 50000000n,
-              // $500,000.00
               description: "Capital reserve equity recognition"
             }
           ]
         };
-        assertDoubleEntryInvariant(capEntry.lines);
-        this.entries.push(capEntry);
+      }
+      async ensureSystemSeedPersisted() {
+        const defaults = this.buildDefaultAccounts();
+        for (const acc of defaults) {
+          if (!this.accounts.has(acc.id)) {
+            this.accounts.set(acc.id, acc);
+            await this.persistAccount(acc);
+          }
+        }
+        if (!this.entries.some((e) => e.id === "je_cap_001")) {
+          const cap = this.baselineCapitalEntry();
+          assertDoubleEntryInvariant(cap.lines);
+          this.entries.push(cap);
+          await this.persistJournalEntry(cap);
+        }
+      }
+      async persistAccount(account) {
+        await prisma.ledgerAccount.upsert({
+          where: { id: account.id },
+          create: {
+            id: account.id,
+            accountNumber: account.accountNumber,
+            name: account.name,
+            type: account.type,
+            classification: account.classification,
+            currency: account.currency,
+            userId: account.userId ?? null,
+            isActive: account.isActive,
+            isFrozen: account.isFrozen,
+            createdAt: account.createdAt,
+            updatedAt: account.updatedAt
+          },
+          update: {
+            accountNumber: account.accountNumber,
+            name: account.name,
+            type: account.type,
+            classification: account.classification,
+            currency: account.currency,
+            userId: account.userId ?? null,
+            isActive: account.isActive,
+            isFrozen: account.isFrozen,
+            updatedAt: account.updatedAt
+          }
+        });
+      }
+      async persistJournalEntry(entry) {
+        await prisma.$transaction(async (tx) => {
+          await tx.financialTransaction.upsert({
+            where: { id: entry.transactionId },
+            create: {
+              id: entry.transactionId,
+              referenceNumber: entry.transactionId,
+              description: entry.narration,
+              status: "POSTED",
+              originCountry: "US",
+              sourceType: "LEDGER_JOURNAL",
+              postedAt: entry.postedAt
+            },
+            update: {
+              description: entry.narration,
+              status: "POSTED",
+              postedAt: entry.postedAt
+            }
+          });
+          await tx.journalEntry.upsert({
+            where: { id: entry.id },
+            create: {
+              id: entry.id,
+              transactionId: entry.transactionId,
+              entrySequence: entry.entrySequence,
+              currency: entry.currency,
+              narration: entry.narration,
+              postedAt: entry.postedAt,
+              lines: {
+                create: entry.lines.map((line) => ({
+                  id: `${entry.id}_${line.accountId}_${line.direction}`,
+                  accountId: line.accountId,
+                  direction: line.direction,
+                  amountMinor: line.amountMinor,
+                  description: line.description ?? null
+                }))
+              }
+            },
+            update: {
+              narration: entry.narration,
+              postedAt: entry.postedAt
+            }
+          });
+        });
       }
       getAccounts() {
         return Array.from(this.accounts.values());
@@ -775,13 +926,22 @@ var init_ledger_service = __esm({
           updatedAt: /* @__PURE__ */ new Date()
         };
         this.accounts.set(existingId, account);
+        void this.persistAccount(account).catch(
+          (err) => console.error("[ledger] failed to persist safeguarding account:", err)
+        );
+        return account;
+      }
+      async ensureSafeguardingAssetAccountDurable(currency) {
+        const account = this.ensureSafeguardingAssetAccount(currency);
+        await this.persistAccount(account);
         return account;
       }
       getEntries() {
         return [...this.entries];
       }
       /**
-       * Posts an immutable balanced journal entry.
+       * Posts an immutable balanced journal entry to the in-memory cache.
+       * Callers that need durability must await persistJournalEntry(entry).
        */
       postJournalEntry(input) {
         assertDoubleEntryInvariant(input.lines);
@@ -811,9 +971,12 @@ var init_ledger_service = __esm({
         this.entries.push(newRecord);
         return newRecord;
       }
-      /**
-       * Calculates net balance for every account and checks global ledger invariant.
-       */
+      async postJournalEntryDurable(input) {
+        await this.readyPromise;
+        const entry = this.postJournalEntry(input);
+        await this.persistJournalEntry(entry);
+        return entry;
+      }
       getLedgerSummary() {
         const debitMap = /* @__PURE__ */ new Map();
         const creditMap = /* @__PURE__ */ new Map();
@@ -859,9 +1022,6 @@ var init_ledger_service = __esm({
           accountBalances
         };
       }
-      /**
-       * Provisions customer liability accounts for the signup-country fiat corridor and Bitcoin.
-       */
       provisionCustomerAccounts(userId, fullName, countryCode = "US") {
         const currencies = getWalletCurrencyCodesForCountry(countryCode);
         const created = [];
@@ -905,9 +1065,17 @@ var init_ledger_service = __esm({
         }
         return created;
       }
-      /**
-       * Computes available minor units for a specific account by summing debits & credits.
-       */
+      async provisionCustomerAccountsDurable(userId, fullName, countryCode = "US") {
+        await this.readyPromise;
+        const created = this.provisionCustomerAccounts(userId, fullName, countryCode);
+        for (const acc of created) {
+          await this.persistAccount(acc);
+        }
+        for (const acc of this.getUserAccounts(userId)) {
+          await this.persistAccount(acc);
+        }
+        return created;
+      }
       getAccountBalance(accountId) {
         const account = this.accounts.get(accountId);
         if (!account) {
@@ -939,9 +1107,6 @@ var init_ledger_service = __esm({
           formatted: money.toDisplayString()
         };
       }
-      /**
-       * Returns all ledger accounts owned by a specific customer.
-       */
       getUserAccounts(userId) {
         return Array.from(this.accounts.values()).filter((acc) => acc.userId === userId);
       }
@@ -2515,8 +2680,27 @@ var init_identifier_service = __esm({
 function escapeHtml(value) {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
+function isLocalhostUrl(url) {
+  return /^(https?:\/\/)?(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(url);
+}
 function getAppBaseUrl() {
-  return getValidatedConfig().APP_URL.replace(/\/$/, "");
+  const configured = getValidatedConfig().APP_URL.replace(/\/$/, "");
+  if (!isLocalhostUrl(configured)) {
+    return configured;
+  }
+  const vercelProductionHost = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+  if (vercelProductionHost) {
+    const host = vercelProductionHost.replace(/^https?:\/\//i, "").replace(/\/$/, "");
+    if (host && !isLocalhostUrl(host)) {
+      return `https://${host}`;
+    }
+  }
+  const onVercel = process.env.VERCEL === "1";
+  const isProduction = process.env.NODE_ENV === "production";
+  if (onVercel || isProduction) {
+    return "https://avenorabank.com";
+  }
+  return configured;
 }
 function getEmailLogoUrl() {
   return `${getAppBaseUrl()}/avenora-header-logo.jpg`;
@@ -5000,6 +5184,7 @@ var init_domesticBankAccount_service = __esm({
           if (user.kycStatus !== "APPROVED") {
             user.kycStatus = "APPROVED";
             user.updatedAt = /* @__PURE__ */ new Date();
+            defaultAuthService.saveUserSoon(user.id);
           }
         }
         return this.ensurePrimaryAccountAfterKycApproval({
@@ -6213,6 +6398,7 @@ var init_kyc_service = __esm({
           user.kycStatus = "SUBMITTED";
           user.updatedAt = /* @__PURE__ */ new Date();
           defaultAuthService.syncCustomerActivationFromKyc(params.userId);
+          defaultAuthService.saveUserSoon(params.userId);
           const customerName = `${params.legalFirstName} ${params.legalLastName}`.trim() || user.fullName;
           voidEmail(
             "kyc-submitted",
@@ -6303,6 +6489,7 @@ var init_kyc_service = __esm({
           user.kycStatus = params.decision;
           user.updatedAt = /* @__PURE__ */ new Date();
           defaultAuthService.syncCustomerActivationFromKyc(params.targetUserId);
+          defaultAuthService.saveUserSoon(params.targetUserId);
         }
         defaultAuditService.logAction({
           action: "KYC_REVIEWED",
@@ -6520,6 +6707,7 @@ var AuthService2, defaultAuthService;
 var init_auth_service = __esm({
   "src/server/services/auth.service.ts"() {
     "use strict";
+    init_prisma();
     init_security_service();
     init_ledger_service();
     init_audit_service();
@@ -6541,17 +6729,153 @@ var init_auth_service = __esm({
       // 15 minutes
       readyPromise;
       constructor() {
-        this.readyPromise = this.seedPrimaryAdminAccount();
+        this.readyPromise = this.bootstrap();
+      }
+      async bootstrap() {
+        await this.hydrateFromDatabase();
+        await this.seedPrimaryAdminAccount();
+      }
+      userFromPrisma(row) {
+        let mfaRecoveryCodes;
+        if (row.mfaRecoveryCodes) {
+          try {
+            const parsed = JSON.parse(row.mfaRecoveryCodes);
+            if (Array.isArray(parsed)) {
+              mfaRecoveryCodes = parsed.filter((c) => typeof c === "string");
+            }
+          } catch {
+            mfaRecoveryCodes = void 0;
+          }
+        }
+        return {
+          id: row.id,
+          email: row.email,
+          passwordHash: row.passwordHash,
+          fullName: row.fullName,
+          phoneNumber: row.phoneNumber || "",
+          transactionPinHash: row.transactionPinHash || "",
+          countryCode: row.countryCode,
+          role: row.role,
+          status: row.status,
+          kycStatus: row.kycStatus,
+          mfaEnabled: row.mfaEnabled,
+          mfaSecret: row.mfaSecret ?? void 0,
+          mfaRecoveryCodes,
+          failedLoginAttempts: row.failedLoginAttempts,
+          lockedUntil: row.lockedUntil ?? void 0,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt
+        };
+      }
+      cachePutUser(user) {
+        this.usersByEmail.set(user.email.toLowerCase(), user);
+        this.usersById.set(user.id, user);
+      }
+      async persistUserCreate(user) {
+        await prisma.user.create({
+          data: {
+            id: user.id,
+            email: user.email.toLowerCase(),
+            passwordHash: user.passwordHash,
+            fullName: user.fullName,
+            phoneNumber: user.phoneNumber,
+            transactionPinHash: user.transactionPinHash,
+            countryCode: user.countryCode,
+            role: user.role,
+            status: user.status,
+            kycStatus: user.kycStatus,
+            mfaEnabled: user.mfaEnabled,
+            mfaSecret: user.mfaSecret ?? null,
+            mfaRecoveryCodes: user.mfaRecoveryCodes ? JSON.stringify(user.mfaRecoveryCodes) : null,
+            failedLoginAttempts: user.failedLoginAttempts,
+            lockedUntil: user.lockedUntil ?? null,
+            createdAt: user.createdAt,
+            updatedAt: user.updatedAt
+          }
+        });
+      }
+      async persistUserUpdate(user) {
+        user.updatedAt = /* @__PURE__ */ new Date();
+        await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            email: user.email.toLowerCase(),
+            passwordHash: user.passwordHash,
+            fullName: user.fullName,
+            phoneNumber: user.phoneNumber,
+            transactionPinHash: user.transactionPinHash,
+            countryCode: user.countryCode,
+            role: user.role,
+            status: user.status,
+            kycStatus: user.kycStatus,
+            mfaEnabled: user.mfaEnabled,
+            mfaSecret: user.mfaSecret ?? null,
+            mfaRecoveryCodes: user.mfaRecoveryCodes ? JSON.stringify(user.mfaRecoveryCodes) : null,
+            failedLoginAttempts: user.failedLoginAttempts,
+            lockedUntil: user.lockedUntil ?? null,
+            updatedAt: user.updatedAt
+          }
+        });
+        this.cachePutUser(user);
+      }
+      async hydrateFromDatabase() {
+        const users = await prisma.user.findMany();
+        for (const row of users) {
+          this.cachePutUser(this.userFromPrisma(row));
+        }
+        const sessions = await prisma.session.findMany({
+          where: {
+            isRevoked: false,
+            expiresAt: { gt: /* @__PURE__ */ new Date() }
+          }
+        });
+        for (const row of sessions) {
+          const session = {
+            id: row.id,
+            userId: row.userId,
+            tokenHash: row.tokenHash,
+            ipAddress: row.ipAddress ?? void 0,
+            userAgent: row.userAgent ?? void 0,
+            isRevoked: row.isRevoked,
+            transactionPinUnlocked: row.transactionPinUnlocked,
+            expiresAt: row.expiresAt,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt
+          };
+          this.sessionsByTokenHash.set(session.tokenHash, session);
+        }
+        const resetTokens = await prisma.passwordResetToken.findMany({
+          where: {
+            isUsed: false,
+            expiresAt: { gt: /* @__PURE__ */ new Date() }
+          }
+        });
+        for (const row of resetTokens) {
+          const record = {
+            id: row.id,
+            userId: row.userId,
+            tokenHash: row.tokenHash,
+            isUsed: row.isUsed,
+            expiresAt: row.expiresAt,
+            createdAt: row.createdAt
+          };
+          this.resetTokensByHash.set(record.tokenHash, record);
+        }
       }
       /** Single operational admin for local / prototype control-center access. */
       async seedPrimaryAdminAccount() {
         const email = "support@avenorabank.com";
+        const existing = await prisma.user.findUnique({ where: { email } });
+        if (existing) {
+          this.cachePutUser(this.userFromPrisma(existing));
+          return;
+        }
         if (this.usersByEmail.has(email)) {
           return;
         }
         const passwordHash = await SecurityService.hashPassword("AvenoraPassword2026!");
         const transactionPinHash = await SecurityService.hashPassword("1234");
-        this.createUserInternal({
+        const user = this.createUserInternal({
           id: "usr_staff_support_admin_01",
           email,
           passwordHash,
@@ -6565,6 +6889,7 @@ var init_auth_service = __esm({
           mfaEnabled: true,
           mfaSecret: "JBSWY3DPEHPK3PXP"
         });
+        await this.persistUserCreate(user);
       }
       /**
        * Creates staff fixtures for automated tests only. Never called from the app constructor.
@@ -6577,62 +6902,73 @@ var init_auth_service = __esm({
         const defaultPassword = "AvenoraPassword2026!";
         const hash = await SecurityService.hashPassword(defaultPassword);
         const defaultPinHash = await SecurityService.hashPassword("1234");
-        this.createUserInternal({
-          id: "usr_staff_support_01",
-          email: "support.lead@avenora.internal",
-          passwordHash: hash,
-          fullName: "Elena Rostova (Support)",
-          phoneNumber: "12025550200",
-          transactionPinHash: defaultPinHash,
-          countryCode: "US",
-          role: "SUPPORT",
-          status: "ACTIVE",
-          kycStatus: "APPROVED",
-          mfaEnabled: true,
-          mfaSecret: "JBSWY3DPEHPK3PXP"
-        });
-        this.createUserInternal({
-          id: "usr_staff_compliance_01",
-          email: "compliance.lead@avenora.internal",
-          passwordHash: hash,
-          fullName: "Maria Chen (Compliance)",
-          phoneNumber: "12025550201",
-          transactionPinHash: defaultPinHash,
-          countryCode: "US",
-          role: "COMPLIANCE_REVIEWER",
-          status: "ACTIVE",
-          kycStatus: "APPROVED",
-          mfaEnabled: true,
-          mfaSecret: "JBSWY3DPEHPK3PXP"
-        });
-        this.createUserInternal({
-          id: "usr_staff_ops_admin_01",
-          email: "admin.ops@avenora.internal",
-          passwordHash: hash,
-          fullName: "Marcus Sterling (Ops Admin)",
-          phoneNumber: "12025550202",
-          transactionPinHash: defaultPinHash,
-          countryCode: "US",
-          role: "ADMIN",
-          status: "ACTIVE",
-          kycStatus: "APPROVED",
-          mfaEnabled: true,
-          mfaSecret: "JBSWY3DPEHPK3PXP"
-        });
-        this.createUserInternal({
-          id: "usr_staff_admin_01",
-          email: "admin.super@avenora.internal",
-          passwordHash: hash,
-          fullName: "David Thorne (Super Admin)",
-          phoneNumber: "12025550203",
-          transactionPinHash: defaultPinHash,
-          countryCode: "US",
-          role: "SUPER_ADMIN",
-          status: "ACTIVE",
-          kycStatus: "APPROVED",
-          mfaEnabled: true,
-          mfaSecret: "JBSWY3DPEHPK3PXP"
-        });
+        const staff = [
+          {
+            id: "usr_staff_support_01",
+            email: "support.lead@avenora.internal",
+            passwordHash: hash,
+            fullName: "Elena Rostova (Support)",
+            phoneNumber: "12025550200",
+            transactionPinHash: defaultPinHash,
+            countryCode: "US",
+            role: "SUPPORT",
+            status: "ACTIVE",
+            kycStatus: "APPROVED",
+            mfaEnabled: true,
+            mfaSecret: "JBSWY3DPEHPK3PXP"
+          },
+          {
+            id: "usr_staff_compliance_01",
+            email: "compliance.lead@avenora.internal",
+            passwordHash: hash,
+            fullName: "Maria Chen (Compliance)",
+            phoneNumber: "12025550201",
+            transactionPinHash: defaultPinHash,
+            countryCode: "US",
+            role: "COMPLIANCE_REVIEWER",
+            status: "ACTIVE",
+            kycStatus: "APPROVED",
+            mfaEnabled: true,
+            mfaSecret: "JBSWY3DPEHPK3PXP"
+          },
+          {
+            id: "usr_staff_ops_admin_01",
+            email: "admin.ops@avenora.internal",
+            passwordHash: hash,
+            fullName: "Marcus Sterling (Ops Admin)",
+            phoneNumber: "12025550202",
+            transactionPinHash: defaultPinHash,
+            countryCode: "US",
+            role: "ADMIN",
+            status: "ACTIVE",
+            kycStatus: "APPROVED",
+            mfaEnabled: true,
+            mfaSecret: "JBSWY3DPEHPK3PXP"
+          },
+          {
+            id: "usr_staff_admin_01",
+            email: "admin.super@avenora.internal",
+            passwordHash: hash,
+            fullName: "David Thorne (Super Admin)",
+            phoneNumber: "12025550203",
+            transactionPinHash: defaultPinHash,
+            countryCode: "US",
+            role: "SUPER_ADMIN",
+            status: "ACTIVE",
+            kycStatus: "APPROVED",
+            mfaEnabled: true,
+            mfaSecret: "JBSWY3DPEHPK3PXP"
+          }
+        ];
+        for (const entry of staff) {
+          const existing = await prisma.user.findUnique({ where: { email: entry.email } });
+          if (existing) {
+            this.cachePutUser(this.userFromPrisma(existing));
+            continue;
+          }
+          const user = this.createUserInternal(entry);
+          await this.persistUserCreate(user);
+        }
       }
       createUserInternal(user) {
         const fullRecord = {
@@ -6641,8 +6977,7 @@ var init_auth_service = __esm({
           createdAt: /* @__PURE__ */ new Date(),
           updatedAt: /* @__PURE__ */ new Date()
         };
-        this.usersByEmail.set(user.email.toLowerCase(), fullRecord);
-        this.usersById.set(user.id, fullRecord);
+        this.cachePutUser(fullRecord);
         return fullRecord;
       }
       /**
@@ -6682,7 +7017,14 @@ var init_auth_service = __esm({
           kycStatus: isKycBypassEnabled() ? "APPROVED" : "NOT_STARTED",
           mfaEnabled: false
         });
-        defaultLedgerService.provisionCustomerAccounts(userId, user.fullName, user.countryCode);
+        try {
+          await this.persistUserCreate(user);
+        } catch (err) {
+          this.usersByEmail.delete(emailNorm);
+          this.usersById.delete(userId);
+          throw err;
+        }
+        await defaultLedgerService.provisionCustomerAccountsDurable(userId, user.fullName, user.countryCode);
         void defaultEmailService.sendWelcomeEmail({ to: user.email, fullName: user.fullName }).catch((err) => console.error("[auth] welcome email failed:", err));
         return this.createSession(user, params.ipAddress, params.userAgent, {
           transactionPinUnlocked: true
@@ -6718,10 +7060,12 @@ var init_auth_service = __esm({
               })
             );
           }
+          await this.persistUserUpdate(user);
           throw genericAuthError;
         }
         user.failedLoginAttempts = 0;
         user.lockedUntil = void 0;
+        await this.persistUserUpdate(user);
         if (!isKycBypassEnabled() && user.role === "CUSTOMER" && user.kycStatus === "APPROVED") {
           try {
             const { defaultKycService: defaultKycService2 } = await Promise.resolve().then(() => (init_kyc_service(), kyc_service_exports));
@@ -6734,12 +7078,13 @@ var init_auth_service = __esm({
               profile.updatedAt = /* @__PURE__ */ new Date();
               const { defaultDomesticBankAccountService: defaultDomesticBankAccountService2 } = await Promise.resolve().then(() => (init_domesticBankAccount_service(), domesticBankAccount_service_exports));
               defaultDomesticBankAccountService2.clearPrimaryAccountForUser(user.id);
+              await this.persistUserUpdate(user);
             }
-            this.syncCustomerActivationFromKyc(user.id);
+            await this.syncCustomerActivationFromKycAsync(user.id);
           } catch {
           }
         } else if (!isKycBypassEnabled() && user.role === "CUSTOMER") {
-          this.syncCustomerActivationFromKyc(user.id);
+          await this.syncCustomerActivationFromKycAsync(user.id);
         }
         if (user.mfaEnabled && user.mfaSecret) {
           if (!params.totpCode && !params.recoveryCode) {
@@ -6759,35 +7104,73 @@ var init_auth_service = __esm({
               throw new Error("Invalid or already used recovery code.");
             }
             user.mfaRecoveryCodes?.splice(codeIndex, 1);
+            await this.persistUserUpdate(user);
           }
         }
         const isNewDevice = !Array.from(this.sessionsByTokenHash.values()).some(
           (s) => s.userId === user.id && s.userAgent === params.userAgent
         );
         const authResult = await this.createSession(user, params.ipAddress, params.userAgent);
-        const signedInAt = (/* @__PURE__ */ new Date()).toISOString();
-        voidEmail(
-          "login-success",
-          defaultEmailService.sendLoginSuccessEmail({
-            to: user.email,
-            fullName: user.fullName,
-            ipAddress: params.ipAddress,
-            signedInAt
-          })
-        );
-        if (isNewDevice) {
+        const isStaffLogin = user.role === "SUPPORT" || user.role === "COMPLIANCE_REVIEWER" || user.role === "ADMIN" || user.role === "SUPER_ADMIN";
+        if (!isStaffLogin) {
+          const signedInAt = (/* @__PURE__ */ new Date()).toISOString();
           voidEmail(
-            "login-new-device",
-            defaultEmailService.sendLoginNewDeviceEmail({
+            "login-success",
+            defaultEmailService.sendLoginSuccessEmail({
               to: user.email,
               fullName: user.fullName,
               ipAddress: params.ipAddress,
-              userAgent: params.userAgent,
               signedInAt
             })
           );
+          if (isNewDevice) {
+            voidEmail(
+              "login-new-device",
+              defaultEmailService.sendLoginNewDeviceEmail({
+                to: user.email,
+                fullName: user.fullName,
+                ipAddress: params.ipAddress,
+                userAgent: params.userAgent,
+                signedInAt
+              })
+            );
+          }
         }
         return { requiresMfa: false, authResult };
+      }
+      /**
+       * Resolve a session from the in-memory map, falling back to Postgres so
+       * serverless instances that did not create the session still accept it.
+       */
+      async resolveSessionByTokenHash(tokenHash) {
+        const cached = this.sessionsByTokenHash.get(tokenHash);
+        if (cached) return cached;
+        const row = await prisma.session.findUnique({ where: { tokenHash } });
+        if (!row) return null;
+        const session = {
+          id: row.id,
+          userId: row.userId,
+          tokenHash: row.tokenHash,
+          ipAddress: row.ipAddress ?? void 0,
+          userAgent: row.userAgent ?? void 0,
+          isRevoked: row.isRevoked,
+          transactionPinUnlocked: row.transactionPinUnlocked,
+          expiresAt: row.expiresAt,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt
+        };
+        this.sessionsByTokenHash.set(tokenHash, session);
+        return session;
+      }
+      /** Resolve a user from cache, falling back to Postgres when needed. */
+      async resolveUserById(userId) {
+        const cached = this.usersById.get(userId);
+        if (cached) return cached;
+        const row = await prisma.user.findUnique({ where: { id: userId } });
+        if (!row) return null;
+        const user = this.userFromPrisma(row);
+        this.cachePutUser(user);
+        return user;
       }
       /**
        * Validates a session token and returns the authenticated user.
@@ -6796,14 +7179,19 @@ var init_auth_service = __esm({
         if (!sessionToken) return null;
         await this.readyPromise;
         const tokenHash = SecurityService.hashToken(sessionToken);
-        const session = this.sessionsByTokenHash.get(tokenHash);
+        const session = await this.resolveSessionByTokenHash(tokenHash);
         if (!session) return null;
         if (session.isRevoked) return null;
         if (session.expiresAt < /* @__PURE__ */ new Date()) {
           session.isRevoked = true;
+          session.updatedAt = /* @__PURE__ */ new Date();
+          void prisma.session.updateMany({
+            where: { tokenHash },
+            data: { isRevoked: true, updatedAt: session.updatedAt }
+          }).catch((err) => console.error("[auth] failed to revoke expired session:", err));
           return null;
         }
-        const user = this.usersById.get(session.userId);
+        const user = await this.resolveUserById(session.userId);
         if (!user) {
           return null;
         }
@@ -6817,8 +7205,17 @@ var init_auth_service = __esm({
         const session = this.sessionsByTokenHash.get(tokenHash);
         if (session) {
           session.isRevoked = true;
+          session.updatedAt = /* @__PURE__ */ new Date();
+          await prisma.session.updateMany({
+            where: { tokenHash },
+            data: { isRevoked: true, updatedAt: session.updatedAt }
+          });
           return true;
         }
+        await prisma.session.updateMany({
+          where: { tokenHash },
+          data: { isRevoked: true, updatedAt: /* @__PURE__ */ new Date() }
+        });
         return false;
       }
       /**
@@ -6828,8 +7225,13 @@ var init_auth_service = __esm({
         for (const session of this.sessionsByTokenHash.values()) {
           if (session.userId === userId) {
             session.isRevoked = true;
+            session.updatedAt = /* @__PURE__ */ new Date();
           }
         }
+        await prisma.session.updateMany({
+          where: { userId, isRevoked: false },
+          data: { isRevoked: true, updatedAt: /* @__PURE__ */ new Date() }
+        });
       }
       /**
        * Initiates password reset workflow: generates single-use short-lived token
@@ -6851,6 +7253,16 @@ var init_auth_service = __esm({
           createdAt: /* @__PURE__ */ new Date()
         };
         this.resetTokensByHash.set(tokenHash, record);
+        await prisma.passwordResetToken.create({
+          data: {
+            id: record.id,
+            userId: record.userId,
+            tokenHash: record.tokenHash,
+            isUsed: false,
+            expiresAt: record.expiresAt,
+            createdAt: record.createdAt
+          }
+        });
         const emailResult = await defaultEmailService.sendPasswordResetEmail({
           to: user.email,
           fullName: user.fullName,
@@ -6880,8 +7292,12 @@ var init_auth_service = __esm({
           throw new Error("User not found.");
         }
         resetRecord.isUsed = true;
+        await prisma.passwordResetToken.update({
+          where: { id: resetRecord.id },
+          data: { isUsed: true }
+        });
         user.passwordHash = await SecurityService.hashPassword(newPassword);
-        user.updatedAt = /* @__PURE__ */ new Date();
+        await this.persistUserUpdate(user);
         await this.revokeAllUserSessions(user.id);
         voidEmail(
           "password-reset-completed",
@@ -6907,7 +7323,7 @@ var init_auth_service = __esm({
           throw new Error("Current password does not match.");
         }
         user.passwordHash = await SecurityService.hashPassword(newPassword);
-        user.updatedAt = /* @__PURE__ */ new Date();
+        await this.persistUserUpdate(user);
         voidEmail(
           "password-changed",
           defaultEmailService.sendPasswordChangedEmail({
@@ -6940,7 +7356,7 @@ var init_auth_service = __esm({
         user.mfaEnabled = true;
         user.mfaSecret = secret;
         user.mfaRecoveryCodes = hashedCodes;
-        user.updatedAt = /* @__PURE__ */ new Date();
+        await this.persistUserUpdate(user);
         voidEmail(
           "mfa-enrolled",
           defaultEmailService.sendMfaEnrolledEmail({
@@ -6952,6 +7368,17 @@ var init_auth_service = __esm({
       }
       getUserById(id) {
         return this.usersById.get(id);
+      }
+      /** Persist a cached user row to Neon (call after mutating kycStatus/status outside AuthService). */
+      async saveUser(userId) {
+        const user = this.usersById.get(userId);
+        if (!user) return;
+        await this.persistUserUpdate(user);
+      }
+      saveUserSoon(userId) {
+        void this.saveUser(userId).catch(
+          (err) => console.error("[auth] failed to persist user:", userId, err)
+        );
       }
       /**
        * Keeps customer account activation aligned with KYC approval.
@@ -6965,10 +7392,17 @@ var init_auth_service = __esm({
         if (user.status === "SUSPENDED" || user.status === "LOCKED") {
           return user.status;
         }
+        let changed = false;
         if (isKycBypassEnabled() && user.kycStatus === "APPROVED") {
           if (user.status !== "ACTIVE") {
             user.status = "ACTIVE";
             user.updatedAt = /* @__PURE__ */ new Date();
+            changed = true;
+          }
+          if (changed) {
+            void this.persistUserUpdate(user).catch(
+              (err) => console.error("[auth] failed to persist KYC activation:", err)
+            );
           }
           return user.status;
         }
@@ -6977,6 +7411,7 @@ var init_auth_service = __esm({
         if (user.status !== nextStatus) {
           user.status = nextStatus;
           user.updatedAt = /* @__PURE__ */ new Date();
+          changed = true;
           if (nextStatus === "PENDING_VERIFICATION" && prevStatus === "ACTIVE") {
             voidEmail(
               "pending-verification",
@@ -6987,7 +7422,15 @@ var init_auth_service = __esm({
             );
           }
         }
+        if (changed) {
+          void this.persistUserUpdate(user).catch(
+            (err) => console.error("[auth] failed to persist KYC activation:", err)
+          );
+        }
         return user.status;
+      }
+      async syncCustomerActivationFromKycAsync(userId) {
+        return this.syncCustomerActivationFromKyc(userId);
       }
       /** Resolve a customer by email (case-insensitive) or internal user id. */
       resolveUserByEmailOrId(query) {
@@ -7002,10 +7445,11 @@ var init_auth_service = __esm({
         return safeUser;
       }
       /** Returns whether the current session has completed post-login PIN unlock. */
-      isTransactionPinUnlocked(sessionToken) {
+      async isTransactionPinUnlocked(sessionToken) {
         if (!sessionToken) return false;
+        await this.readyPromise;
         const tokenHash = SecurityService.hashToken(sessionToken);
-        const session = this.sessionsByTokenHash.get(tokenHash);
+        const session = await this.resolveSessionByTokenHash(tokenHash);
         if (!session || session.isRevoked || session.expiresAt < /* @__PURE__ */ new Date()) return false;
         return session.transactionPinUnlocked === true;
       }
@@ -7019,17 +7463,21 @@ var init_auth_service = __esm({
           throw new Error("Transaction PIN must be exactly 4 digits.");
         }
         const tokenHash = SecurityService.hashToken(sessionToken);
-        const session = this.sessionsByTokenHash.get(tokenHash);
+        const session = await this.resolveSessionByTokenHash(tokenHash);
         if (!session || session.isRevoked || session.expiresAt < /* @__PURE__ */ new Date()) {
           throw new Error("Invalid or expired session.");
         }
-        const user = this.usersById.get(session.userId);
+        const user = await this.resolveUserById(session.userId);
         if (!user) {
           throw new Error("Invalid or expired session.");
         }
         await this.assertTransactionPinForUser(user, transactionPin);
         session.transactionPinUnlocked = true;
         session.updatedAt = /* @__PURE__ */ new Date();
+        await prisma.session.update({
+          where: { id: session.id },
+          data: { transactionPinUnlocked: true, updatedAt: session.updatedAt }
+        });
         return { transactionPinUnlocked: true };
       }
       /**
@@ -7040,7 +7488,7 @@ var init_auth_service = __esm({
         if (!/^\d{4}$/.test(transactionPin)) {
           throw new Error("Transaction PIN must be exactly 4 digits.");
         }
-        const user = this.usersById.get(userId);
+        const user = await this.resolveUserById(userId);
         if (!user) {
           throw new Error("Invalid transaction PIN.");
         }
@@ -7068,11 +7516,12 @@ var init_auth_service = __esm({
               })
             );
           }
+          await this.persistUserUpdate(user);
           throw new Error("Invalid transaction PIN.");
         }
         user.failedLoginAttempts = 0;
         user.lockedUntil = void 0;
-        user.updatedAt = /* @__PURE__ */ new Date();
+        await this.persistUserUpdate(user);
       }
       async createSession(user, ipAddress, userAgent, options) {
         const rawSessionToken = SecurityService.generateSecureToken(32);
@@ -7091,6 +7540,20 @@ var init_auth_service = __esm({
           createdAt: /* @__PURE__ */ new Date(),
           updatedAt: /* @__PURE__ */ new Date()
         };
+        await prisma.session.create({
+          data: {
+            id: session.id,
+            userId: session.userId,
+            tokenHash: session.tokenHash,
+            ipAddress: session.ipAddress ?? null,
+            userAgent: session.userAgent ?? null,
+            isRevoked: false,
+            transactionPinUnlocked,
+            expiresAt: session.expiresAt,
+            createdAt: session.createdAt,
+            updatedAt: session.updatedAt
+          }
+        });
         this.sessionsByTokenHash.set(tokenHash, session);
         return {
           user: this.sanitizeUser(user),
@@ -7156,13 +7619,9 @@ var init_auth_service = __esm({
         }
         const prevStatus = targetUser.status;
         targetUser.status = params.newStatus;
-        targetUser.updatedAt = /* @__PURE__ */ new Date();
+        await this.persistUserUpdate(targetUser);
         if (params.newStatus === "LOCKED") {
-          for (const session of this.sessionsByTokenHash.values()) {
-            if (session.userId === targetUser.id) {
-              session.isRevoked = true;
-            }
-          }
+          await this.revokeAllUserSessions(targetUser.id);
         }
         defaultAuditService.logAction({
           action: "USER_STATUS_CHANGED",
@@ -7234,7 +7693,7 @@ var init_auth_service = __esm({
         }
         const prevRole = targetUser.role;
         targetUser.role = params.newRole;
-        targetUser.updatedAt = /* @__PURE__ */ new Date();
+        await this.persistUserUpdate(targetUser);
         defaultAuditService.logAction({
           action: "USER_ROLE_CHANGED",
           actorUserId: params.actorUserId,
@@ -7303,8 +7762,14 @@ var init_auth_service = __esm({
             this.resetTokensByHash.delete(hash);
           }
         }
+        await prisma.user.delete({ where: { id: targetUser.id } });
         this.usersByEmail.delete(email.toLowerCase());
         this.usersById.delete(targetUser.id);
+        for (const [hash, session] of this.sessionsByTokenHash.entries()) {
+          if (session.userId === params.targetUserId) {
+            this.sessionsByTokenHash.delete(hash);
+          }
+        }
         defaultAuditService.logAction({
           action: "USER_DELETED",
           actorUserId: params.actorUserId,
@@ -7715,7 +8180,7 @@ ledgerRouter.get("/verify-invariant", (_req, res) => {
     rule: "Sum(Debits) === Sum(Credits) across all posted journal entries"
   });
 });
-ledgerRouter.post("/entries", (req, res, next) => {
+ledgerRouter.post("/entries", async (req, res, next) => {
   try {
     const validated = PostEntrySchema.parse(req.body);
     const invariant = verifyDoubleEntryInvariant(validated.lines);
@@ -7731,7 +8196,7 @@ ledgerRouter.post("/entries", (req, res, next) => {
       });
       return;
     }
-    const created = defaultLedgerService.postJournalEntry({
+    const created = await defaultLedgerService.postJournalEntryDurable({
       transactionId: validated.transactionId,
       currency: validated.currency,
       narration: validated.narration,
@@ -8923,15 +9388,19 @@ authRouter.post("/logout", authenticate, async (req, res, next) => {
     next(err);
   }
 });
-authRouter.get("/me", authenticate, (req, res) => {
-  if (!req.user) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
+authRouter.get("/me", authenticate, async (req, res, next) => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    res.json({
+      user: defaultAuthService.sanitizeUser(req.user),
+      transactionPinUnlocked: await defaultAuthService.isTransactionPinUnlocked(req.sessionToken)
+    });
+  } catch (err) {
+    next(err);
   }
-  res.json({
-    user: defaultAuthService.sanitizeUser(req.user),
-    transactionPinUnlocked: defaultAuthService.isTransactionPinUnlocked(req.sessionToken)
-  });
 });
 authRouter.post(
   "/verify-transaction-pin",
@@ -9854,12 +10323,225 @@ function illustrativeLocalUnitsPerUsd(currency) {
 }
 
 // src/server/services/wallet.service.ts
+init_prisma();
 var WalletService = class {
   quotes = /* @__PURE__ */ new Map();
   idempotencyStore = /* @__PURE__ */ new Map();
   transactionHistory = [];
   pendingDeposits = [];
   pendingWithdrawals = [];
+  readyPromise;
+  constructor() {
+    this.readyPromise = this.bootstrap();
+  }
+  whenReady() {
+    return this.readyPromise;
+  }
+  async bootstrap() {
+    await defaultLedgerService.whenReady();
+    await this.hydrateFromDatabase();
+  }
+  async hydrateFromDatabase() {
+    const ops = await prisma.walletOperation.findMany({ orderBy: { createdAt: "desc" } });
+    this.transactionHistory = [];
+    for (const row of ops) {
+      try {
+        const parsed = JSON.parse(row.payload);
+        this.transactionHistory.push(parsed);
+      } catch {
+      }
+    }
+    const deposits = await prisma.pendingDeposit.findMany();
+    this.pendingDeposits = deposits.map((d) => ({
+      id: d.id,
+      userId: d.userId,
+      kind: d.kind,
+      currency: d.currency,
+      amountDecimal: d.amountDecimal,
+      amountMinor: d.amountMinor,
+      formattedAmount: d.formattedAmount,
+      sourceRail: d.sourceRail ?? void 0,
+      fileName: d.fileName ?? void 0,
+      mimeType: d.mimeType ?? void 0,
+      fileSize: d.fileSize ?? void 0,
+      storageRef: d.storageRef ?? void 0,
+      submittedAt: d.submittedAt,
+      reviewedAt: d.reviewedAt ?? void 0,
+      reviewedByUserId: d.reviewedByUserId ?? void 0,
+      reviewNotes: d.reviewNotes ?? void 0,
+      status: d.status,
+      holdJournalEntryId: d.holdJournalEntryId,
+      referenceNumber: d.referenceNumber,
+      releaseJournalEntryId: d.releaseJournalEntryId ?? void 0,
+      origin: d.origin,
+      initiatedByUserId: d.initiatedByUserId ?? void 0,
+      initiationReason: d.initiationReason ?? void 0
+    }));
+    const withdrawals = await prisma.pendingWithdrawal.findMany();
+    this.pendingWithdrawals = withdrawals.map((w) => {
+      let bankingDetails = {};
+      try {
+        bankingDetails = JSON.parse(w.bankingDetails);
+      } catch {
+        bankingDetails = {};
+      }
+      return {
+        id: w.id,
+        userId: w.userId,
+        kind: w.kind,
+        currency: w.currency,
+        amountDecimal: w.amountDecimal,
+        amountMinor: w.amountMinor,
+        formattedAmount: w.formattedAmount,
+        destinationRail: w.destinationRail ?? void 0,
+        bankingDetails,
+        btcAddress: w.btcAddress ?? void 0,
+        submittedAt: w.submittedAt,
+        reviewedAt: w.reviewedAt ?? void 0,
+        reviewedByUserId: w.reviewedByUserId ?? void 0,
+        reviewNotes: w.reviewNotes ?? void 0,
+        status: w.status,
+        holdJournalEntryId: w.holdJournalEntryId,
+        referenceNumber: w.referenceNumber,
+        releaseJournalEntryId: w.releaseJournalEntryId ?? void 0,
+        origin: w.origin,
+        initiatedByUserId: w.initiatedByUserId ?? void 0,
+        initiationReason: w.initiationReason ?? void 0
+      };
+    });
+    const idem = await prisma.idempotencyRecord.findMany({
+      where: { expiresAt: { gt: /* @__PURE__ */ new Date() } }
+    });
+    for (const row of idem) {
+      try {
+        const response = JSON.parse(row.responseBody);
+        this.idempotencyStore.set(row.key, {
+          key: row.key,
+          userId: row.userId || "",
+          endpoint: row.endpoint,
+          requestHash: row.requestHash,
+          response,
+          createdAt: row.createdAt
+        });
+      } catch {
+      }
+    }
+    const quotes = await prisma.fxQuote.findMany({
+      where: { expiresAt: { gt: /* @__PURE__ */ new Date() }, isExecuted: false }
+    });
+    for (const q of quotes) {
+      this.quotes.set(q.id, {
+        id: q.id,
+        userId: q.userId,
+        sourceCurrency: q.sourceCurrency,
+        destinationCurrency: q.destinationCurrency,
+        sourceAmountMinor: q.sourceAmountMinor.toString(),
+        destinationAmountMinor: q.destinationAmountMinor.toString(),
+        exchangeRate: q.exchangeRate,
+        feeMinor: q.feeMinor.toString(),
+        rateSource: q.rateSource,
+        expiresAt: q.expiresAt,
+        isExecuted: q.isExecuted,
+        createdAt: q.createdAt
+      });
+    }
+  }
+  async persistWalletOperation(tx) {
+    const userId = tx.userId;
+    if (!userId) return;
+    await prisma.walletOperation.upsert({
+      where: { id: tx.transactionId },
+      create: {
+        id: tx.transactionId,
+        userId,
+        payload: JSON.stringify(tx),
+        status: tx.status,
+        createdAt: new Date(tx.timestamp),
+        updatedAt: /* @__PURE__ */ new Date()
+      },
+      update: {
+        payload: JSON.stringify(tx),
+        status: tx.status,
+        updatedAt: /* @__PURE__ */ new Date()
+      }
+    });
+  }
+  async persistPendingDeposit(record) {
+    await prisma.pendingDeposit.upsert({
+      where: { id: record.id },
+      create: {
+        id: record.id,
+        userId: record.userId,
+        kind: record.kind,
+        currency: record.currency,
+        amountDecimal: record.amountDecimal,
+        amountMinor: record.amountMinor,
+        formattedAmount: record.formattedAmount,
+        sourceRail: record.sourceRail ?? null,
+        fileName: record.fileName ?? null,
+        mimeType: record.mimeType ?? null,
+        fileSize: record.fileSize ?? null,
+        storageRef: record.storageRef ?? null,
+        submittedAt: record.submittedAt,
+        reviewedAt: record.reviewedAt ?? null,
+        reviewedByUserId: record.reviewedByUserId ?? null,
+        reviewNotes: record.reviewNotes ?? null,
+        status: record.status,
+        holdJournalEntryId: record.holdJournalEntryId,
+        referenceNumber: record.referenceNumber,
+        releaseJournalEntryId: record.releaseJournalEntryId ?? null,
+        origin: record.origin,
+        initiatedByUserId: record.initiatedByUserId ?? null,
+        initiationReason: record.initiationReason ?? null,
+        updatedAt: /* @__PURE__ */ new Date()
+      },
+      update: {
+        status: record.status,
+        reviewedAt: record.reviewedAt ?? null,
+        reviewedByUserId: record.reviewedByUserId ?? null,
+        reviewNotes: record.reviewNotes ?? null,
+        releaseJournalEntryId: record.releaseJournalEntryId ?? null,
+        updatedAt: /* @__PURE__ */ new Date()
+      }
+    });
+  }
+  async persistPendingWithdrawal(record) {
+    await prisma.pendingWithdrawal.upsert({
+      where: { id: record.id },
+      create: {
+        id: record.id,
+        userId: record.userId,
+        kind: record.kind,
+        currency: record.currency,
+        amountDecimal: record.amountDecimal,
+        amountMinor: record.amountMinor,
+        formattedAmount: record.formattedAmount,
+        destinationRail: record.destinationRail ?? null,
+        bankingDetails: JSON.stringify(record.bankingDetails || {}),
+        btcAddress: record.btcAddress ?? null,
+        submittedAt: record.submittedAt,
+        reviewedAt: record.reviewedAt ?? null,
+        reviewedByUserId: record.reviewedByUserId ?? null,
+        reviewNotes: record.reviewNotes ?? null,
+        status: record.status,
+        holdJournalEntryId: record.holdJournalEntryId,
+        referenceNumber: record.referenceNumber,
+        releaseJournalEntryId: record.releaseJournalEntryId ?? null,
+        origin: record.origin,
+        initiatedByUserId: record.initiatedByUserId ?? null,
+        initiationReason: record.initiationReason ?? null,
+        updatedAt: /* @__PURE__ */ new Date()
+      },
+      update: {
+        status: record.status,
+        reviewedAt: record.reviewedAt ?? null,
+        reviewedByUserId: record.reviewedByUserId ?? null,
+        reviewNotes: record.reviewNotes ?? null,
+        releaseJournalEntryId: record.releaseJournalEntryId ?? null,
+        updatedAt: /* @__PURE__ */ new Date()
+      }
+    });
+  }
   // Illustrative reference rates (strictly synthetic demo rates)
   /** Illustrative USD value of one unit of currency (prototype triangulation). */
   illustrativeUsdPerUnit(currency) {
@@ -9903,7 +10585,10 @@ var WalletService = class {
   getOrCreateUserWallet(userId, fullName = "Valued Customer", countryCode) {
     const resolvedCountry = this.resolveCustomerCountryCode(userId, countryCode);
     const currencies = getWalletCurrencyCodesForCountry(resolvedCountry);
-    defaultLedgerService.provisionCustomerAccounts(userId, fullName, resolvedCountry);
+    const created = defaultLedgerService.provisionCustomerAccounts(userId, fullName, resolvedCountry);
+    if (created.length > 0) {
+      void defaultLedgerService.provisionCustomerAccountsDurable(userId, fullName, resolvedCountry).catch((err) => console.error("[wallet] failed to persist provisioned accounts:", err));
+    }
     const userLedgerAccounts = defaultLedgerService.getUserAccounts(userId);
     const accounts = [];
     for (const curr of currencies) {
@@ -9981,7 +10666,7 @@ var WalletService = class {
       }
     ];
     assertDoubleEntryInvariant(lines);
-    const entry = defaultLedgerService.postJournalEntry({
+    const entry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency,
       narration: `Inbound Deposit via ${params.sourceRail || "WIRE"} [${refNum}]`,
@@ -10056,7 +10741,7 @@ var WalletService = class {
       }
     ];
     assertDoubleEntryInvariant(lines);
-    const entry = defaultLedgerService.postJournalEntry({
+    const entry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency,
       narration: `Outbound Withdrawal [${refNum}]`,
@@ -10137,7 +10822,7 @@ var WalletService = class {
       }
     ];
     assertDoubleEntryInvariant(lines);
-    const entry = defaultLedgerService.postJournalEntry({
+    const entry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency,
       narration: `Internal P2P Transfer [${refNum}]`,
@@ -10315,7 +11000,7 @@ var WalletService = class {
       }
     ];
     assertDoubleEntryInvariant(leg1Lines);
-    defaultLedgerService.postJournalEntry({
+    await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency: quote.sourceCurrency,
       narration: `FX Outbound Leg [${refNum}]`,
@@ -10336,7 +11021,7 @@ var WalletService = class {
       }
     ];
     assertDoubleEntryInvariant(leg2Lines);
-    const entry2 = defaultLedgerService.postJournalEntry({
+    const entry2 = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency: quote.destinationCurrency,
       narration: `FX Inbound Leg [${refNum}]`,
@@ -10465,7 +11150,7 @@ var WalletService = class {
       }
     ];
     assertDoubleEntryInvariant(lines);
-    const entry = defaultLedgerService.postJournalEntry({
+    const entry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency,
       narration: `Pending deposit hold (${params.kind}) [${refNum}]`,
@@ -10491,6 +11176,7 @@ var WalletService = class {
       origin: "CUSTOMER"
     };
     this.pendingDeposits.push(record);
+    await this.persistPendingDeposit(record);
     this.recordPendingDepositHistory(record, entry.id, txId);
     defaultAuditService.logAction({
       action: params.kind === "BTC" ? "BTC_DEPOSIT_PROOF_SUBMITTED" : "FIAT_DEPOSIT_REQUESTED",
@@ -10539,7 +11225,7 @@ var WalletService = class {
     const status = params.status ?? "PENDING_REVIEW";
     return this.pendingDeposits.filter((d) => d.status === status).sort((a, b) => b.submittedAt.getTime() - a.submittedAt.getTime());
   }
-  approvePendingDeposit(params) {
+  async approvePendingDeposit(params) {
     const allowed = ["SUPPORT", "COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"];
     if (!allowed.includes(params.actorRole)) {
       throw new Error("Access denied: Staff role required.");
@@ -10571,7 +11257,7 @@ var WalletService = class {
       }
     ];
     assertDoubleEntryInvariant(lines);
-    const releaseEntry = defaultLedgerService.postJournalEntry({
+    const releaseEntry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency: record.currency,
       narration: `Deposit approved \u2014 hold released to available [${refNum}]`,
@@ -10635,9 +11321,10 @@ var WalletService = class {
         })
       );
     }
+    await this.persistPendingDeposit(record);
     return record;
   }
-  rejectPendingDeposit(params) {
+  async rejectPendingDeposit(params) {
     const allowed = ["SUPPORT", "COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"];
     if (!allowed.includes(params.actorRole)) {
       throw new Error("Access denied: Staff role required.");
@@ -10672,7 +11359,7 @@ var WalletService = class {
       }
     ];
     assertDoubleEntryInvariant(lines);
-    const releaseEntry = defaultLedgerService.postJournalEntry({
+    const releaseEntry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency: record.currency,
       narration: `Deposit rejected \u2014 hold reversed [${refNum}]`,
@@ -10734,6 +11421,7 @@ var WalletService = class {
         })
       );
     }
+    await this.persistPendingDeposit(record);
     return record;
   }
   /**
@@ -10788,7 +11476,7 @@ var WalletService = class {
       }
     ];
     assertDoubleEntryInvariant(lines);
-    const entry = defaultLedgerService.postJournalEntry({
+    const entry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency,
       narration: `Pending withdrawal hold (${params.kind}) [${refNum}]`,
@@ -10812,6 +11500,7 @@ var WalletService = class {
       origin: "CUSTOMER"
     };
     this.pendingWithdrawals.push(record);
+    await this.persistPendingWithdrawal(record);
     this.recordPendingWithdrawalHistory(record, entry.id, txId);
     defaultAuditService.logAction({
       action: params.kind === "BTC" ? "BTC_WITHDRAWAL_REQUESTED" : "FIAT_WITHDRAWAL_REQUESTED",
@@ -10861,7 +11550,7 @@ var WalletService = class {
     const status = params.status ?? "PENDING_REVIEW";
     return this.pendingWithdrawals.filter((w) => w.status === status).sort((a, b) => b.submittedAt.getTime() - a.submittedAt.getTime());
   }
-  approvePendingWithdrawal(params) {
+  async approvePendingWithdrawal(params) {
     const allowed = ["SUPPORT", "COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"];
     if (!allowed.includes(params.actorRole)) {
       throw new Error("Access denied: Staff role required.");
@@ -10894,7 +11583,7 @@ var WalletService = class {
       }
     ];
     assertDoubleEntryInvariant(lines);
-    const releaseEntry = defaultLedgerService.postJournalEntry({
+    const releaseEntry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency: record.currency,
       narration: `Withdrawal approved \u2014 payout from hold [${refNum}]`,
@@ -10959,9 +11648,10 @@ var WalletService = class {
         })
       );
     }
+    await this.persistPendingWithdrawal(record);
     return record;
   }
-  rejectPendingWithdrawal(params) {
+  async rejectPendingWithdrawal(params) {
     const allowed = ["SUPPORT", "COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"];
     if (!allowed.includes(params.actorRole)) {
       throw new Error("Access denied: Staff role required.");
@@ -10996,7 +11686,7 @@ var WalletService = class {
       }
     ];
     assertDoubleEntryInvariant(lines);
-    const releaseEntry = defaultLedgerService.postJournalEntry({
+    const releaseEntry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency: record.currency,
       narration: `Withdrawal rejected \u2014 hold returned to available [${refNum}]`,
@@ -11060,6 +11750,7 @@ var WalletService = class {
         })
       );
     }
+    await this.persistPendingWithdrawal(record);
     return record;
   }
   /**
@@ -11112,7 +11803,7 @@ var WalletService = class {
         }
       ];
       assertDoubleEntryInvariant(lines2);
-      const entry2 = defaultLedgerService.postJournalEntry({
+      const entry2 = await defaultLedgerService.postJournalEntryDurable({
         transactionId: txId2,
         currency,
         narration: `Pending admin funding credit hold [${refNum2}]`,
@@ -11136,6 +11827,7 @@ var WalletService = class {
         initiationReason: reason
       };
       this.pendingDeposits.push(deposit);
+      await this.persistPendingDeposit(deposit);
       this.recordPendingDepositHistory(deposit, entry2.id, txId2);
       defaultAuditService.logAction({
         action: "ADMIN_WALLET_CREDIT_REQUESTED",
@@ -11189,7 +11881,7 @@ var WalletService = class {
       }
     ];
     assertDoubleEntryInvariant(lines);
-    const entry = defaultLedgerService.postJournalEntry({
+    const entry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency,
       narration: `Pending admin funding debit hold [${refNum}]`,
@@ -11214,6 +11906,7 @@ var WalletService = class {
       initiationReason: reason
     };
     this.pendingWithdrawals.push(withdrawal);
+    await this.persistPendingWithdrawal(withdrawal);
     this.recordPendingWithdrawalHistory(withdrawal, entry.id, txId);
     defaultAuditService.logAction({
       action: "ADMIN_WALLET_DEBIT_REQUESTED",
@@ -11267,11 +11960,12 @@ var WalletService = class {
     return existing.response;
   }
   recordIdempotency(key, userId, endpoint, payload, response) {
+    const requestHash = generateSimpleHash(payload);
     this.idempotencyStore.set(key, {
       key,
       userId,
       endpoint,
-      requestHash: generateSimpleHash(payload),
+      requestHash,
       response,
       createdAt: /* @__PURE__ */ new Date()
     });
@@ -11279,12 +11973,45 @@ var WalletService = class {
     if (!exists) {
       this.transactionHistory.unshift(response);
     }
+    void this.persistWalletOperation(response).catch(
+      (err) => console.error("[wallet] failed to persist operation:", err)
+    );
+    void prisma.idempotencyRecord.upsert({
+      where: { key },
+      create: {
+        key,
+        userId,
+        endpoint,
+        requestHash,
+        responseCode: 200,
+        responseBody: JSON.stringify(response),
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1e3)
+      },
+      update: {
+        responseBody: JSON.stringify(response),
+        requestHash,
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1e3)
+      }
+    }).catch((err) => console.error("[wallet] failed to persist idempotency:", err));
   }
   recordTransaction(tx) {
     const exists = this.transactionHistory.some((t) => t.transactionId === tx.transactionId);
     if (!exists) {
       this.transactionHistory.unshift(tx);
     }
+    void this.persistWalletOperation(tx).catch(
+      (err) => console.error("[wallet] failed to persist operation:", err)
+    );
+  }
+  async recordTransactionDurable(tx) {
+    const exists = this.transactionHistory.some((t) => t.transactionId === tx.transactionId);
+    if (!exists) {
+      this.transactionHistory.unshift(tx);
+    } else {
+      const idx = this.transactionHistory.findIndex((t) => t.transactionId === tx.transactionId);
+      if (idx >= 0) this.transactionHistory[idx] = tx;
+    }
+    await this.persistWalletOperation(tx);
   }
   recordPendingDepositHistory(record, journalEntryId, transactionId) {
     this.recordTransaction({
@@ -11339,6 +12066,9 @@ var WalletService = class {
     );
     if (tx) {
       Object.assign(tx, patch);
+      void this.persistWalletOperation(tx).catch(
+        (err) => console.error("[wallet] failed to persist history patch:", err)
+      );
       return;
     }
     if (!seed) return;
@@ -11598,7 +12328,7 @@ var WalletService = class {
    * Strictly preserves immutability: DOES NOT mutate or delete the original posted entry.
    * Restricted to ADMIN and SUPER_ADMIN. Requires documented reason.
    */
-  reverseTransaction(params) {
+  async reverseTransaction(params) {
     const allowed = ["ADMIN", "SUPER_ADMIN"];
     if (!allowed.includes(params.actorRole)) {
       throw new Error("Access denied: Only Administrators can authorize ledger transaction reversals.");
@@ -11626,7 +12356,7 @@ var WalletService = class {
     }));
     assertDoubleEntryInvariant(reversalLines);
     const reversalEntryId = `tx_rev_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const reversalJournal = defaultLedgerService.postJournalEntry({
+    const reversalJournal = await defaultLedgerService.postJournalEntryDurable({
       transactionId: reversalEntryId,
       currency: origEntry.currency,
       narration: `Compensating reversal for ${tx.referenceNumber}: ${params.reason.trim()}`,
@@ -14053,7 +14783,7 @@ var CardService = class {
    * Step 1: Point-of-Sale / Merchant Authorization Simulator.
    * Performs authorization checks and creates a PENDING_HOLD backed by the double-entry ledger.
    */
-  simulateAuthorization(params) {
+  async simulateAuthorization(params) {
     const card = this.cards.get(params.cardId);
     if (!card) throw new Error("Card not found.");
     if (card.status === "FROZEN") {
@@ -14118,7 +14848,7 @@ var CardService = class {
       }
     ];
     assertDoubleEntryInvariant(holdLines);
-    const journalEntry = defaultLedgerService.postJournalEntry({
+    const journalEntry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: `tx_card_auth_${Date.now()}`,
       currency: card.currency,
       narration: `Pre-authorization hold for ${params.merchantName} (MCC: ${params.mcc})`,
@@ -14169,7 +14899,7 @@ var CardService = class {
    * Step 2: Settle Pre-Authorization.
    * Clears the pending hold liability and completes settlement against provider clearing.
    */
-  simulateSettlement(params) {
+  async simulateSettlement(params) {
     const auth = this.authorizations.get(params.authorizationId);
     if (!auth) throw new Error("Authorization record not found.");
     if (auth.holdStatus !== "PENDING_HOLD") {
@@ -14201,7 +14931,7 @@ var CardService = class {
       }
     ];
     assertDoubleEntryInvariant(settleLines);
-    const journalEntry = defaultLedgerService.postJournalEntry({
+    const journalEntry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: `tx_card_settle_${auth.authCode}_${Date.now()}`,
       currency: card.currency,
       narration: `Card settlement: ${auth.merchantName} (${auth.authCode})`,
@@ -14233,7 +14963,7 @@ var CardService = class {
    * Step 3: Release or Reverse Hold.
    * Restores held funds back to customer available balance (e.g. cancelled order, expired pre-auth).
    */
-  simulateReleaseOrReversal(params) {
+  async simulateReleaseOrReversal(params) {
     const auth = this.authorizations.get(params.authorizationId);
     if (!auth) throw new Error("Authorization record not found.");
     if (auth.holdStatus !== "PENDING_HOLD") {
@@ -14267,7 +14997,7 @@ var CardService = class {
       }
     ];
     assertDoubleEntryInvariant(reversalLines);
-    const journalEntry = defaultLedgerService.postJournalEntry({
+    const journalEntry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: `tx_card_rev_${auth.authCode}_${Date.now()}`,
       currency: card.currency,
       narration: `Hold release/reversal: ${auth.merchantName} (${auth.authCode})`,
@@ -14470,11 +15200,11 @@ cardRouter.patch("/:id/limits", authenticate, requireTransactionEligible, (req, 
     next(err);
   }
 });
-cardRouter.post("/:id/simulate-auth", authenticate, requireTransactionEligible, (req, res, next) => {
+cardRouter.post("/:id/simulate-auth", authenticate, requireTransactionEligible, async (req, res, next) => {
   try {
     const cardId = req.params.id;
     const validated = SimulateAuthSchema.parse(req.body);
-    const result = defaultCardService.simulateAuthorization({
+    const result = await defaultCardService.simulateAuthorization({
       cardId,
       merchantName: validated.merchantName,
       mcc: validated.mcc,
@@ -14491,11 +15221,11 @@ cardRouter.post("/:id/simulate-auth", authenticate, requireTransactionEligible, 
     next(err);
   }
 });
-cardRouter.post("/authorizations/:authId/settle", authenticate, requireTransactionEligible, (req, res, next) => {
+cardRouter.post("/authorizations/:authId/settle", authenticate, requireTransactionEligible, async (req, res, next) => {
   try {
     const user = req.user;
     const authId = req.params.authId;
-    const result = defaultCardService.simulateSettlement({
+    const result = await defaultCardService.simulateSettlement({
       authorizationId: authId,
       actorUserId: user.id
     });
@@ -14508,12 +15238,12 @@ cardRouter.post("/authorizations/:authId/settle", authenticate, requireTransacti
     next(err);
   }
 });
-cardRouter.post("/authorizations/:authId/release", authenticate, requireTransactionEligible, (req, res, next) => {
+cardRouter.post("/authorizations/:authId/release", authenticate, requireTransactionEligible, async (req, res, next) => {
   try {
     const user = req.user;
     const authId = req.params.authId;
     const reason = req.body?.reason ? String(req.body.reason) : "Customer or merchant requested hold release";
-    const result = defaultCardService.simulateReleaseOrReversal({
+    const result = await defaultCardService.simulateReleaseOrReversal({
       authorizationId: authId,
       actorUserId: user.id,
       reason
@@ -14704,7 +15434,7 @@ var ProviderPaymentService = class {
    * LEDGER SAFETY: Posts an immutable, balanced double-entry journal entry!
    * Idempotent: If already CONFIRMED, deduplicates and skips posting a second entry.
    */
-  processProviderConfirmation(params) {
+  async processProviderConfirmation(params) {
     const payment = this.payments.get(params.paymentId);
     if (!payment) {
       throw new Error(`Payment "${params.paymentId}" not found.`);
@@ -14734,7 +15464,7 @@ var ProviderPaymentService = class {
     }
     assertValidProviderTransition(payment.status, "CONFIRMED", payment.id);
     const prevStatus = payment.status;
-    const journalEntry = defaultLedgerService.postJournalEntry({
+    const journalEntry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: payment.id,
       currency: payment.currency,
       narration: `Provider Settled Transfer ${payment.id} (Ref: ${params.externalReference})`,
@@ -14860,7 +15590,7 @@ var ProviderPaymentService = class {
    * State: REVERSED.
    * LEDGER SAFETY: Posts an immutable compensating entry (swapping debit and credit).
    */
-  reversePayment(params) {
+  async reversePayment(params) {
     const payment = this.payments.get(params.paymentId);
     if (!payment) {
       throw new Error(`Payment "${params.paymentId}" not found.`);
@@ -14869,7 +15599,7 @@ var ProviderPaymentService = class {
       throw new Error(`Cannot reverse payment in status "${payment.status}". Only CONFIRMED payments can be reversed.`);
     }
     const prevStatus = payment.status;
-    const reversalEntry = defaultLedgerService.postJournalEntry({
+    const reversalEntry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: `tx_rev_${payment.id}`,
       currency: payment.currency,
       narration: `Compensating Reversal for Payment ${payment.id}: ${params.reason}`,
@@ -14924,7 +15654,7 @@ var ProviderPaymentService = class {
    * Resolves a payment currently in RECONCILIATION_REQUIRED status.
    * Audited administrative operation ensuring ledger balance invariants.
    */
-  resolveReconciliation(params) {
+  async resolveReconciliation(params) {
     const payment = this.payments.get(params.paymentId);
     if (!payment) {
       throw new Error(`Payment "${params.paymentId}" not found.`);
@@ -14937,7 +15667,7 @@ var ProviderPaymentService = class {
     const prevStatus = payment.status;
     if (params.resolution === "CONFIRMED") {
       if (!payment.ledgerJournalEntryId && params.debtorAccount && params.creditorAccount) {
-        const journalEntry = defaultLedgerService.postJournalEntry({
+        const journalEntry = await defaultLedgerService.postJournalEntryDurable({
           transactionId: payment.id,
           currency: payment.currency,
           narration: `Reconciliation Settlement: ${payment.id} - ${params.reason}`,
@@ -14961,7 +15691,7 @@ var ProviderPaymentService = class {
       payment.status = "CONFIRMED";
     } else if (params.resolution === "REVERSED") {
       if (payment.ledgerJournalEntryId && params.debtorAccount && params.creditorAccount) {
-        const reversalEntry = defaultLedgerService.postJournalEntry({
+        const reversalEntry = await defaultLedgerService.postJournalEntryDurable({
           transactionId: `tx_rev_${payment.id}`,
           currency: payment.currency,
           narration: `Compensating Reversal for Reconciled Payment ${payment.id}: ${params.reason}`,
@@ -15085,7 +15815,11 @@ adminRouter.get(
   async (req, res, next) => {
     try {
       const user = req.user;
-      const usersData = await defaultAuthService.getAllUsersForAdmin({ actorRole: user.role, limit: 1e3 });
+      const usersData = await defaultAuthService.getAllUsersForAdmin({
+        actorRole: user.role,
+        roleFilter: "CUSTOMER",
+        limit: 1e3
+      });
       const totalUsers = usersData.total;
       const activeUsers = usersData.users.filter((u) => u.status === "ACTIVE").length;
       const suspendedUsers = usersData.users.filter((u) => u.status === "SUSPENDED").length;
@@ -15219,11 +15953,11 @@ adminRouter.get(
   requireRoles(["SUPPORT", "COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"]),
   async (req, res, next) => {
     try {
-      const { search, role, status, kycStatus, limit, offset } = req.query;
+      const { search, status, kycStatus, limit, offset } = req.query;
       const result = await defaultAuthService.getAllUsersForAdmin({
         actorRole: req.user.role,
         search: search ? String(search) : void 0,
-        roleFilter: role ? String(role) : void 0,
+        roleFilter: "CUSTOMER",
         statusFilter: status ? String(status) : void 0,
         kycFilter: kycStatus ? String(kycStatus) : void 0,
         limit: limit ? parseInt(String(limit), 10) : 50,
@@ -15243,7 +15977,7 @@ adminRouter.get(
     try {
       const customerId = req.params.id;
       const user = defaultAuthService.getUserById(customerId);
-      if (!user) {
+      if (!user || user.role !== "CUSTOMER") {
         res.status(404).json({
           type: "https://avenora.com/errors/not-found",
           title: "Customer Not Found",
@@ -15515,10 +16249,10 @@ adminRouter.post(
   "/deposits/:depositId/approve",
   authenticate,
   requireRoles(["SUPPORT", "COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"]),
-  (req, res, next) => {
+  async (req, res, next) => {
     try {
       const validated = DepositApproveSchema.parse(req.body ?? {});
-      const updated = defaultWalletService.approvePendingDeposit({
+      const updated = await defaultWalletService.approvePendingDeposit({
         depositId: req.params.depositId,
         actorUserId: req.user.id,
         actorRole: req.user.role,
@@ -15541,10 +16275,10 @@ adminRouter.post(
   "/deposits/:depositId/reject",
   authenticate,
   requireRoles(["SUPPORT", "COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"]),
-  (req, res, next) => {
+  async (req, res, next) => {
     try {
       const validated = DepositRejectSchema.parse(req.body ?? {});
-      const updated = defaultWalletService.rejectPendingDeposit({
+      const updated = await defaultWalletService.rejectPendingDeposit({
         depositId: req.params.depositId,
         actorUserId: req.user.id,
         actorRole: req.user.role,
@@ -15596,10 +16330,10 @@ adminRouter.post(
   "/withdrawals/:withdrawalId/approve",
   authenticate,
   requireRoles(["SUPPORT", "COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"]),
-  (req, res, next) => {
+  async (req, res, next) => {
     try {
       const validated = WithdrawalApproveSchema.parse(req.body ?? {});
-      const updated = defaultWalletService.approvePendingWithdrawal({
+      const updated = await defaultWalletService.approvePendingWithdrawal({
         withdrawalId: req.params.withdrawalId,
         actorUserId: req.user.id,
         actorRole: req.user.role,
@@ -15622,10 +16356,10 @@ adminRouter.post(
   "/withdrawals/:withdrawalId/reject",
   authenticate,
   requireRoles(["SUPPORT", "COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"]),
-  (req, res, next) => {
+  async (req, res, next) => {
     try {
       const validated = WithdrawalRejectSchema.parse(req.body ?? {});
-      const updated = defaultWalletService.rejectPendingWithdrawal({
+      const updated = await defaultWalletService.rejectPendingWithdrawal({
         withdrawalId: req.params.withdrawalId,
         actorUserId: req.user.id,
         actorRole: req.user.role,
@@ -15712,11 +16446,11 @@ adminRouter.post(
   "/transactions/:id/reverse",
   authenticate,
   requireRoles(["ADMIN", "SUPER_ADMIN"]),
-  (req, res, next) => {
+  async (req, res, next) => {
     try {
       const txId = req.params.id;
       const validated = ReverseTransactionSchema.parse(req.body);
-      const result = defaultWalletService.reverseTransaction({
+      const result = await defaultWalletService.reverseTransaction({
         transactionId: txId,
         actorUserId: req.user.id,
         actorRole: req.user.role,
@@ -15742,11 +16476,11 @@ adminRouter.post(
   "/providers/payments/:id/reconcile",
   authenticate,
   requireRoles(["COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"]),
-  (req, res, next) => {
+  async (req, res, next) => {
     try {
       const paymentId = req.params.id;
       const validated = ResolveReconciliationSchema.parse(req.body);
-      const result = defaultProviderPaymentService.resolveReconciliation({
+      const result = await defaultProviderPaymentService.resolveReconciliation({
         paymentId,
         resolution: validated.resolution,
         reason: validated.reason,
@@ -16581,10 +17315,15 @@ var vercel_handler_default = createExpressApp();
  */
 /**
  * @license Apache-2.0
+ * Avenora — Prisma client singleton (Neon PostgreSQL)
+ */
+/**
+ * @license Apache-2.0
  * Avenora Fintech Platform — Reference Financial Ledger Service
  *
  * Implements strict double-entry mechanics, Chart of Accounts,
  * immutable posted journal entries, and invariant verification.
+ * Neon is the source of truth; in-memory Maps are a write-through cache.
  */
 /**
  * @license Apache-2.0

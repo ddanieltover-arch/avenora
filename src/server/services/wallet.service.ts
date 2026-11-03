@@ -36,6 +36,7 @@ import {
   illustrativeLocalUnitsPerUsd,
   illustrativeUsdPerLocalUnit,
 } from '../../lib/illustrativeUsdRates.ts';
+import { prisma } from '../db/prisma.ts';
 
 export interface WalletAccountView {
   id: string;
@@ -193,6 +194,231 @@ export class WalletService {
   private transactionHistory: FinancialOperationResult[] = [];
   private pendingDeposits: PendingDepositRecord[] = [];
   private pendingWithdrawals: PendingWithdrawalRecord[] = [];
+  private readyPromise: Promise<void>;
+
+  constructor() {
+    this.readyPromise = this.bootstrap();
+  }
+
+  public whenReady(): Promise<void> {
+    return this.readyPromise;
+  }
+
+  private async bootstrap(): Promise<void> {
+    await defaultLedgerService.whenReady();
+    await this.hydrateFromDatabase();
+  }
+
+  private async hydrateFromDatabase(): Promise<void> {
+    const ops = await prisma.walletOperation.findMany({ orderBy: { createdAt: 'desc' } });
+    this.transactionHistory = [];
+    for (const row of ops) {
+      try {
+        const parsed = JSON.parse(row.payload) as FinancialOperationResult;
+        this.transactionHistory.push(parsed);
+      } catch {
+        /* skip corrupt */
+      }
+    }
+
+    const deposits = await prisma.pendingDeposit.findMany();
+    this.pendingDeposits = deposits.map((d) => ({
+      id: d.id,
+      userId: d.userId,
+      kind: d.kind as PendingDepositKind,
+      currency: d.currency,
+      amountDecimal: d.amountDecimal,
+      amountMinor: d.amountMinor,
+      formattedAmount: d.formattedAmount,
+      sourceRail: d.sourceRail ?? undefined,
+      fileName: d.fileName ?? undefined,
+      mimeType: d.mimeType ?? undefined,
+      fileSize: d.fileSize ?? undefined,
+      storageRef: d.storageRef ?? undefined,
+      submittedAt: d.submittedAt,
+      reviewedAt: d.reviewedAt ?? undefined,
+      reviewedByUserId: d.reviewedByUserId ?? undefined,
+      reviewNotes: d.reviewNotes ?? undefined,
+      status: d.status as PendingDepositStatus,
+      holdJournalEntryId: d.holdJournalEntryId,
+      referenceNumber: d.referenceNumber,
+      releaseJournalEntryId: d.releaseJournalEntryId ?? undefined,
+      origin: d.origin as PendingFundingOrigin,
+      initiatedByUserId: d.initiatedByUserId ?? undefined,
+      initiationReason: d.initiationReason ?? undefined,
+    }));
+
+    const withdrawals = await prisma.pendingWithdrawal.findMany();
+    this.pendingWithdrawals = withdrawals.map((w) => {
+      let bankingDetails: Record<string, string> = {};
+      try {
+        bankingDetails = JSON.parse(w.bankingDetails) as Record<string, string>;
+      } catch {
+        bankingDetails = {};
+      }
+      return {
+        id: w.id,
+        userId: w.userId,
+        kind: w.kind as PendingWithdrawalKind,
+        currency: w.currency,
+        amountDecimal: w.amountDecimal,
+        amountMinor: w.amountMinor,
+        formattedAmount: w.formattedAmount,
+        destinationRail: w.destinationRail ?? undefined,
+        bankingDetails,
+        btcAddress: w.btcAddress ?? undefined,
+        submittedAt: w.submittedAt,
+        reviewedAt: w.reviewedAt ?? undefined,
+        reviewedByUserId: w.reviewedByUserId ?? undefined,
+        reviewNotes: w.reviewNotes ?? undefined,
+        status: w.status as PendingWithdrawalStatus,
+        holdJournalEntryId: w.holdJournalEntryId,
+        referenceNumber: w.referenceNumber,
+        releaseJournalEntryId: w.releaseJournalEntryId ?? undefined,
+        origin: w.origin as PendingFundingOrigin,
+        initiatedByUserId: w.initiatedByUserId ?? undefined,
+        initiationReason: w.initiationReason ?? undefined,
+      };
+    });
+
+    const idem = await prisma.idempotencyRecord.findMany({
+      where: { expiresAt: { gt: new Date() } },
+    });
+    for (const row of idem) {
+      try {
+        const response = JSON.parse(row.responseBody) as FinancialOperationResult;
+        this.idempotencyStore.set(row.key, {
+          key: row.key,
+          userId: row.userId || '',
+          endpoint: row.endpoint,
+          requestHash: row.requestHash,
+          response,
+          createdAt: row.createdAt,
+        });
+      } catch {
+        /* skip */
+      }
+    }
+
+    const quotes = await prisma.fxQuote.findMany({
+      where: { expiresAt: { gt: new Date() }, isExecuted: false },
+    });
+    for (const q of quotes) {
+      this.quotes.set(q.id, {
+        id: q.id,
+        userId: q.userId,
+        sourceCurrency: q.sourceCurrency,
+        destinationCurrency: q.destinationCurrency,
+        sourceAmountMinor: q.sourceAmountMinor.toString(),
+        destinationAmountMinor: q.destinationAmountMinor.toString(),
+        exchangeRate: q.exchangeRate,
+        feeMinor: q.feeMinor.toString(),
+        rateSource: q.rateSource,
+        expiresAt: q.expiresAt,
+        isExecuted: q.isExecuted,
+        createdAt: q.createdAt,
+      });
+    }
+  }
+
+  private async persistWalletOperation(tx: FinancialOperationResult): Promise<void> {
+    const userId = tx.userId;
+    if (!userId) return;
+    await prisma.walletOperation.upsert({
+      where: { id: tx.transactionId },
+      create: {
+        id: tx.transactionId,
+        userId,
+        payload: JSON.stringify(tx),
+        status: tx.status,
+        createdAt: new Date(tx.timestamp),
+        updatedAt: new Date(),
+      },
+      update: {
+        payload: JSON.stringify(tx),
+        status: tx.status,
+        updatedAt: new Date(),
+      },
+    });
+  }
+
+  private async persistPendingDeposit(record: PendingDepositRecord): Promise<void> {
+    await prisma.pendingDeposit.upsert({
+      where: { id: record.id },
+      create: {
+        id: record.id,
+        userId: record.userId,
+        kind: record.kind,
+        currency: record.currency,
+        amountDecimal: record.amountDecimal,
+        amountMinor: record.amountMinor,
+        formattedAmount: record.formattedAmount,
+        sourceRail: record.sourceRail ?? null,
+        fileName: record.fileName ?? null,
+        mimeType: record.mimeType ?? null,
+        fileSize: record.fileSize ?? null,
+        storageRef: record.storageRef ?? null,
+        submittedAt: record.submittedAt,
+        reviewedAt: record.reviewedAt ?? null,
+        reviewedByUserId: record.reviewedByUserId ?? null,
+        reviewNotes: record.reviewNotes ?? null,
+        status: record.status,
+        holdJournalEntryId: record.holdJournalEntryId,
+        referenceNumber: record.referenceNumber,
+        releaseJournalEntryId: record.releaseJournalEntryId ?? null,
+        origin: record.origin,
+        initiatedByUserId: record.initiatedByUserId ?? null,
+        initiationReason: record.initiationReason ?? null,
+        updatedAt: new Date(),
+      },
+      update: {
+        status: record.status,
+        reviewedAt: record.reviewedAt ?? null,
+        reviewedByUserId: record.reviewedByUserId ?? null,
+        reviewNotes: record.reviewNotes ?? null,
+        releaseJournalEntryId: record.releaseJournalEntryId ?? null,
+        updatedAt: new Date(),
+      },
+    });
+  }
+
+  private async persistPendingWithdrawal(record: PendingWithdrawalRecord): Promise<void> {
+    await prisma.pendingWithdrawal.upsert({
+      where: { id: record.id },
+      create: {
+        id: record.id,
+        userId: record.userId,
+        kind: record.kind,
+        currency: record.currency,
+        amountDecimal: record.amountDecimal,
+        amountMinor: record.amountMinor,
+        formattedAmount: record.formattedAmount,
+        destinationRail: record.destinationRail ?? null,
+        bankingDetails: JSON.stringify(record.bankingDetails || {}),
+        btcAddress: record.btcAddress ?? null,
+        submittedAt: record.submittedAt,
+        reviewedAt: record.reviewedAt ?? null,
+        reviewedByUserId: record.reviewedByUserId ?? null,
+        reviewNotes: record.reviewNotes ?? null,
+        status: record.status,
+        holdJournalEntryId: record.holdJournalEntryId,
+        referenceNumber: record.referenceNumber,
+        releaseJournalEntryId: record.releaseJournalEntryId ?? null,
+        origin: record.origin,
+        initiatedByUserId: record.initiatedByUserId ?? null,
+        initiationReason: record.initiationReason ?? null,
+        updatedAt: new Date(),
+      },
+      update: {
+        status: record.status,
+        reviewedAt: record.reviewedAt ?? null,
+        reviewedByUserId: record.reviewedByUserId ?? null,
+        reviewNotes: record.reviewNotes ?? null,
+        releaseJournalEntryId: record.releaseJournalEntryId ?? null,
+        updatedAt: new Date(),
+      },
+    });
+  }
 
 
   // Illustrative reference rates (strictly synthetic demo rates)
@@ -253,7 +479,12 @@ export class WalletService {
     const resolvedCountry = this.resolveCustomerCountryCode(userId, countryCode);
     const currencies = getWalletCurrencyCodesForCountry(resolvedCountry);
 
-    defaultLedgerService.provisionCustomerAccounts(userId, fullName, resolvedCountry);
+    const created = defaultLedgerService.provisionCustomerAccounts(userId, fullName, resolvedCountry);
+    if (created.length > 0) {
+      void defaultLedgerService
+        .provisionCustomerAccountsDurable(userId, fullName, resolvedCountry)
+        .catch((err) => console.error('[wallet] failed to persist provisioned accounts:', err));
+    }
     const userLedgerAccounts = defaultLedgerService.getUserAccounts(userId);
 
     const accounts: WalletAccountView[] = [];
@@ -356,7 +587,7 @@ export class WalletService {
 
     assertDoubleEntryInvariant(lines);
 
-    const entry = defaultLedgerService.postJournalEntry({
+    const entry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency,
       narration: `Inbound Deposit via ${params.sourceRail || 'WIRE'} [${refNum}]`,
@@ -455,7 +686,7 @@ export class WalletService {
 
     assertDoubleEntryInvariant(lines);
 
-    const entry = defaultLedgerService.postJournalEntry({
+    const entry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency,
       narration: `Outbound Withdrawal [${refNum}]`,
@@ -564,7 +795,7 @@ export class WalletService {
 
     assertDoubleEntryInvariant(lines);
 
-    const entry = defaultLedgerService.postJournalEntry({
+    const entry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency,
       narration: `Internal P2P Transfer [${refNum}]`,
@@ -787,7 +1018,7 @@ export class WalletService {
     ];
     assertDoubleEntryInvariant(leg1Lines);
 
-    defaultLedgerService.postJournalEntry({
+    await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency: quote.sourceCurrency,
       narration: `FX Outbound Leg [${refNum}]`,
@@ -813,7 +1044,7 @@ export class WalletService {
     ];
     assertDoubleEntryInvariant(leg2Lines);
 
-    const entry2 = defaultLedgerService.postJournalEntry({
+    const entry2 = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency: quote.destinationCurrency,
       narration: `FX Inbound Leg [${refNum}]`,
@@ -967,7 +1198,7 @@ export class WalletService {
     ];
     assertDoubleEntryInvariant(lines);
 
-    const entry = defaultLedgerService.postJournalEntry({
+    const entry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency,
       narration: `Pending deposit hold (${params.kind}) [${refNum}]`,
@@ -997,6 +1228,7 @@ export class WalletService {
       origin: 'CUSTOMER',
     };
     this.pendingDeposits.push(record);
+    await this.persistPendingDeposit(record);
     this.recordPendingDepositHistory(record, entry.id, txId);
 
     defaultAuditService.logAction({
@@ -1055,12 +1287,12 @@ export class WalletService {
       .sort((a, b) => b.submittedAt.getTime() - a.submittedAt.getTime());
   }
 
-  public approvePendingDeposit(params: {
+  public async approvePendingDeposit(params: {
     depositId: string;
     actorUserId: string;
     actorRole: UserRole;
     notes?: string;
-  }): PendingDepositRecord {
+  }): Promise<PendingDepositRecord> {
     const allowed: UserRole[] = ['SUPPORT', 'COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN'];
     if (!allowed.includes(params.actorRole)) {
       throw new Error('Access denied: Staff role required.');
@@ -1096,7 +1328,7 @@ export class WalletService {
     ];
     assertDoubleEntryInvariant(lines);
 
-    const releaseEntry = defaultLedgerService.postJournalEntry({
+    const releaseEntry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency: record.currency,
       narration: `Deposit approved — hold released to available [${refNum}]`,
@@ -1108,6 +1340,9 @@ export class WalletService {
     record.reviewedByUserId = params.actorUserId;
     record.reviewNotes = params.notes;
     record.releaseJournalEntryId = releaseEntry.id;
+
+    // #region agent log
+    // #endregion
 
     const availBalance = defaultLedgerService.getAccountBalance(availAccountId);
     this.updateHistoryByReference(
@@ -1165,15 +1400,16 @@ export class WalletService {
       );
     }
 
+    await this.persistPendingDeposit(record);
     return record;
   }
 
-  public rejectPendingDeposit(params: {
+  public async rejectPendingDeposit(params: {
     depositId: string;
     actorUserId: string;
     actorRole: UserRole;
     reason: string;
-  }): PendingDepositRecord {
+  }): Promise<PendingDepositRecord> {
     const allowed: UserRole[] = ['SUPPORT', 'COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN'];
     if (!allowed.includes(params.actorRole)) {
       throw new Error('Access denied: Staff role required.');
@@ -1212,7 +1448,7 @@ export class WalletService {
     ];
     assertDoubleEntryInvariant(lines);
 
-    const releaseEntry = defaultLedgerService.postJournalEntry({
+    const releaseEntry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency: record.currency,
       narration: `Deposit rejected — hold reversed [${refNum}]`,
@@ -1279,6 +1515,7 @@ export class WalletService {
       );
     }
 
+    await this.persistPendingDeposit(record);
     return record;
   }
 
@@ -1350,7 +1587,7 @@ export class WalletService {
     ];
     assertDoubleEntryInvariant(lines);
 
-    const entry = defaultLedgerService.postJournalEntry({
+    const entry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency,
       narration: `Pending withdrawal hold (${params.kind}) [${refNum}]`,
@@ -1375,6 +1612,7 @@ export class WalletService {
       origin: 'CUSTOMER',
     };
     this.pendingWithdrawals.push(record);
+    await this.persistPendingWithdrawal(record);
     this.recordPendingWithdrawalHistory(record, entry.id, txId);
 
     defaultAuditService.logAction({
@@ -1434,12 +1672,12 @@ export class WalletService {
       .sort((a, b) => b.submittedAt.getTime() - a.submittedAt.getTime());
   }
 
-  public approvePendingWithdrawal(params: {
+  public async approvePendingWithdrawal(params: {
     withdrawalId: string;
     actorUserId: string;
     actorRole: UserRole;
     notes?: string;
-  }): PendingWithdrawalRecord {
+  }): Promise<PendingWithdrawalRecord> {
     const allowed: UserRole[] = ['SUPPORT', 'COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN'];
     if (!allowed.includes(params.actorRole)) {
       throw new Error('Access denied: Staff role required.');
@@ -1481,7 +1719,7 @@ export class WalletService {
     ];
     assertDoubleEntryInvariant(lines);
 
-    const releaseEntry = defaultLedgerService.postJournalEntry({
+    const releaseEntry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency: record.currency,
       narration: `Withdrawal approved — payout from hold [${refNum}]`,
@@ -1551,15 +1789,16 @@ export class WalletService {
       );
     }
 
+    await this.persistPendingWithdrawal(record);
     return record;
   }
 
-  public rejectPendingWithdrawal(params: {
+  public async rejectPendingWithdrawal(params: {
     withdrawalId: string;
     actorUserId: string;
     actorRole: UserRole;
     reason: string;
-  }): PendingWithdrawalRecord {
+  }): Promise<PendingWithdrawalRecord> {
     const allowed: UserRole[] = ['SUPPORT', 'COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN'];
     if (!allowed.includes(params.actorRole)) {
       throw new Error('Access denied: Staff role required.');
@@ -1598,7 +1837,7 @@ export class WalletService {
     ];
     assertDoubleEntryInvariant(lines);
 
-    const releaseEntry = defaultLedgerService.postJournalEntry({
+    const releaseEntry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency: record.currency,
       narration: `Withdrawal rejected — hold returned to available [${refNum}]`,
@@ -1667,6 +1906,7 @@ export class WalletService {
       );
     }
 
+    await this.persistPendingWithdrawal(record);
     return record;
   }
 
@@ -1738,7 +1978,7 @@ export class WalletService {
       ];
       assertDoubleEntryInvariant(lines);
 
-      const entry = defaultLedgerService.postJournalEntry({
+      const entry = await defaultLedgerService.postJournalEntryDurable({
         transactionId: txId,
         currency,
         narration: `Pending admin funding credit hold [${refNum}]`,
@@ -1763,6 +2003,7 @@ export class WalletService {
         initiationReason: reason,
       };
       this.pendingDeposits.push(deposit);
+      await this.persistPendingDeposit(deposit);
       this.recordPendingDepositHistory(deposit, entry.id, txId);
 
       defaultAuditService.logAction({
@@ -1824,7 +2065,7 @@ export class WalletService {
     ];
     assertDoubleEntryInvariant(lines);
 
-    const entry = defaultLedgerService.postJournalEntry({
+    const entry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: txId,
       currency,
       narration: `Pending admin funding debit hold [${refNum}]`,
@@ -1850,6 +2091,7 @@ export class WalletService {
       initiationReason: reason,
     };
     this.pendingWithdrawals.push(withdrawal);
+    await this.persistPendingWithdrawal(withdrawal);
     this.recordPendingWithdrawalHistory(withdrawal, entry.id, txId);
 
     defaultAuditService.logAction({
@@ -1924,11 +2166,12 @@ export class WalletService {
     payload: unknown,
     response: FinancialOperationResult
   ): void {
+    const requestHash = generateSimpleHash(payload);
     this.idempotencyStore.set(key, {
       key,
       userId,
       endpoint,
-      requestHash: generateSimpleHash(payload),
+      requestHash,
       response,
       createdAt: new Date(),
     });
@@ -1937,6 +2180,28 @@ export class WalletService {
     if (!exists) {
       this.transactionHistory.unshift(response);
     }
+    void this.persistWalletOperation(response).catch((err) =>
+      console.error('[wallet] failed to persist operation:', err),
+    );
+    void prisma.idempotencyRecord
+      .upsert({
+        where: { key },
+        create: {
+          key,
+          userId,
+          endpoint,
+          requestHash,
+          responseCode: 200,
+          responseBody: JSON.stringify(response),
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        },
+        update: {
+          responseBody: JSON.stringify(response),
+          requestHash,
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        },
+      })
+      .catch((err) => console.error('[wallet] failed to persist idempotency:', err));
   }
 
   public recordTransaction(tx: FinancialOperationResult): void {
@@ -1944,6 +2209,20 @@ export class WalletService {
     if (!exists) {
       this.transactionHistory.unshift(tx);
     }
+    void this.persistWalletOperation(tx).catch((err) =>
+      console.error('[wallet] failed to persist operation:', err),
+    );
+  }
+
+  public async recordTransactionDurable(tx: FinancialOperationResult): Promise<void> {
+    const exists = this.transactionHistory.some((t) => t.transactionId === tx.transactionId);
+    if (!exists) {
+      this.transactionHistory.unshift(tx);
+    } else {
+      const idx = this.transactionHistory.findIndex((t) => t.transactionId === tx.transactionId);
+      if (idx >= 0) this.transactionHistory[idx] = tx;
+    }
+    await this.persistWalletOperation(tx);
   }
 
   private recordPendingDepositHistory(
@@ -2017,6 +2296,9 @@ export class WalletService {
     );
     if (tx) {
       Object.assign(tx, patch);
+      void this.persistWalletOperation(tx).catch((err) =>
+        console.error('[wallet] failed to persist history patch:', err),
+      );
       return;
     }
     if (!seed) return;
@@ -2332,13 +2614,13 @@ export class WalletService {
    * Strictly preserves immutability: DOES NOT mutate or delete the original posted entry.
    * Restricted to ADMIN and SUPER_ADMIN. Requires documented reason.
    */
-  public reverseTransaction(params: {
+  public async reverseTransaction(params: {
     transactionId: string;
     actorUserId: string;
     actorRole: UserRole;
     reason: string;
     correlationId?: string;
-  }): { originalTransaction: FinancialOperationResult; compensatingTransaction: FinancialOperationResult; reversalJournalEntryId: string } {
+  }): Promise<{ originalTransaction: FinancialOperationResult; compensatingTransaction: FinancialOperationResult; reversalJournalEntryId: string }> {
     const allowed: UserRole[] = ['ADMIN', 'SUPER_ADMIN'];
     if (!allowed.includes(params.actorRole)) {
       throw new Error('Access denied: Only Administrators can authorize ledger transaction reversals.');
@@ -2378,7 +2660,7 @@ export class WalletService {
 
     // Post the balanced compensating reversal to the ledger
     const reversalEntryId = `tx_rev_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const reversalJournal = defaultLedgerService.postJournalEntry({
+    const reversalJournal = await defaultLedgerService.postJournalEntryDurable({
       transactionId: reversalEntryId,
       currency: origEntry.currency,
       narration: `Compensating reversal for ${tx.referenceNumber}: ${params.reason.trim()}`,

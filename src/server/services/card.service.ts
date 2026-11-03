@@ -563,13 +563,13 @@ export class CardService {
    * Step 1: Point-of-Sale / Merchant Authorization Simulator.
    * Performs authorization checks and creates a PENDING_HOLD backed by the double-entry ledger.
    */
-  public simulateAuthorization(params: {
+  public async simulateAuthorization(params: {
     cardId: string;
     merchantName: string;
     mcc: string;
     amountDecimal: string;
     currency: string;
-  }): { authorization: CardAuthorizationRecord; card: PaymentCardRecord; ledgerJournalEntryId: string } {
+  }): Promise<{ authorization: CardAuthorizationRecord; card: PaymentCardRecord; ledgerJournalEntryId: string }> {
     const card = this.cards.get(params.cardId);
     if (!card) throw new Error('Card not found.');
 
@@ -652,7 +652,7 @@ export class CardService {
     ];
     assertDoubleEntryInvariant(holdLines);
 
-    const journalEntry = defaultLedgerService.postJournalEntry({
+    const journalEntry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: `tx_card_auth_${Date.now()}`,
       currency: card.currency,
       narration: `Pre-authorization hold for ${params.merchantName} (MCC: ${params.mcc})`,
@@ -710,10 +710,10 @@ export class CardService {
    * Step 2: Settle Pre-Authorization.
    * Clears the pending hold liability and completes settlement against provider clearing.
    */
-  public simulateSettlement(params: {
+  public async simulateSettlement(params: {
     authorizationId: string;
     actorUserId: string;
-  }): { authorization: CardAuthorizationRecord; ledgerJournalEntryId: string } {
+  }): Promise<{ authorization: CardAuthorizationRecord; ledgerJournalEntryId: string }> {
     const auth = this.authorizations.get(params.authorizationId);
     if (!auth) throw new Error('Authorization record not found.');
 
@@ -757,7 +757,7 @@ export class CardService {
     ];
     assertDoubleEntryInvariant(settleLines);
 
-    const journalEntry = defaultLedgerService.postJournalEntry({
+    const journalEntry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: `tx_card_settle_${auth.authCode}_${Date.now()}`,
       currency: card.currency,
       narration: `Card settlement: ${auth.merchantName} (${auth.authCode})`,
@@ -793,11 +793,11 @@ export class CardService {
    * Step 3: Release or Reverse Hold.
    * Restores held funds back to customer available balance (e.g. cancelled order, expired pre-auth).
    */
-  public simulateReleaseOrReversal(params: {
+  public async simulateReleaseOrReversal(params: {
     authorizationId: string;
     actorUserId: string;
     reason?: string;
-  }): { authorization: CardAuthorizationRecord; ledgerJournalEntryId: string } {
+  }): Promise<{ authorization: CardAuthorizationRecord; ledgerJournalEntryId: string }> {
     const auth = this.authorizations.get(params.authorizationId);
     if (!auth) throw new Error('Authorization record not found.');
 
@@ -841,7 +841,7 @@ export class CardService {
     ];
     assertDoubleEntryInvariant(reversalLines);
 
-    const journalEntry = defaultLedgerService.postJournalEntry({
+    const journalEntry = await defaultLedgerService.postJournalEntryDurable({
       transactionId: `tx_card_rev_${auth.authCode}_${Date.now()}`,
       currency: card.currency,
       narration: `Hold release/reversal: ${auth.merchantName} (${auth.authCode})`,

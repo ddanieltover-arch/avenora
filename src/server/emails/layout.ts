@@ -28,8 +28,36 @@ export function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
+function isLocalhostUrl(url: string): boolean {
+  return /^(https?:\/\/)?(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(url);
+}
+
+/**
+ * Public site origin for email links and absolute assets.
+ * Never emit localhost when running on Vercel / production — prefer APP_URL,
+ * then VERCEL_PROJECT_PRODUCTION_URL, then the canonical avenorabank.com domain.
+ */
 export function getAppBaseUrl(): string {
-  return getValidatedConfig().APP_URL.replace(/\/$/, '');
+  const configured = getValidatedConfig().APP_URL.replace(/\/$/, '');
+  if (!isLocalhostUrl(configured)) {
+    return configured;
+  }
+
+  const vercelProductionHost = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+  if (vercelProductionHost) {
+    const host = vercelProductionHost.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+    if (host && !isLocalhostUrl(host)) {
+      return `https://${host}`;
+    }
+  }
+
+  const onVercel = process.env.VERCEL === '1';
+  const isProduction = process.env.NODE_ENV === 'production';
+  if (onVercel || isProduction) {
+    return 'https://avenorabank.com';
+  }
+
+  return configured;
 }
 
 /** Absolute URL for the header logo (white A on teal — email clients need absolute src). */

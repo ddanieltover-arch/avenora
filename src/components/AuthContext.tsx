@@ -222,18 +222,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const verifyTransactionPin = async (pin: string) => {
-    if (!token) throw new Error('Not authenticated');
+    const activeToken = token || sessionStorage.getItem(SESSION_TOKEN_STORAGE_KEY);
+    if (!activeToken) throw new Error('Not authenticated');
     const res = await fetch('/api/v1/auth/verify-transaction-pin', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${activeToken}`,
       },
       body: JSON.stringify({ transactionPin: pin }),
     });
     const data = await readApiJson(res);
     if (!res.ok) {
-      throw new Error(data.detail || data.title || 'Invalid transaction PIN');
+      const detail = String(data.detail || data.title || 'Invalid transaction PIN');
+      if (/session is invalid|expired|has been revoked|authentication required/i.test(detail)) {
+        await logout();
+      }
+      throw new Error(detail);
     }
     setTransactionPinUnlocked(true);
   };

@@ -147,6 +147,36 @@ export function usePortalDashboardData({
     fetchAll();
   }, [fetchAll, userId]);
 
+  // Refetch when the tab becomes visible again (e.g. after admin posts funds).
+  useEffect(() => {
+    if (!token) return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void fetchAll();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
+  }, [token, fetchAll]);
+
+  // Poll while any transaction is still pending review.
+  const hasPendingReview = useMemo(
+    () => transactions.some((tx) => tx.status === 'PENDING_REVIEW'),
+    [transactions],
+  );
+
+  useEffect(() => {
+    if (!token || !hasPendingReview) return;
+    const id = window.setInterval(() => {
+      void fetchAll();
+    }, 8000);
+    return () => window.clearInterval(id);
+  }, [token, hasPendingReview, fetchAll]);
+
   return {
     walletsSummary,
     cardsSummary,

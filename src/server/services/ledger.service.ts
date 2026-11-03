@@ -4,25 +4,79 @@
  *
  * Implements strict double-entry mechanics, Chart of Accounts,
  * immutable posted journal entries, and invariant verification.
+ * Neon is the source of truth; in-memory Maps are a write-through cache.
  */
 
+import type {
+  AccountClassification as PrismaAccountClassification,
+  AccountType as PrismaAccountType,
+  LedgerEntryDirection as PrismaLedgerEntryDirection,
+} from '@prisma/client';
 import { SYSTEM_CHART_OF_ACCOUNTS } from '../../config/constants.ts';
 import { LedgerAccount } from '../../domain/ledger/LedgerAccount.ts';
 import { JournalEntryRecord, LedgerLineInput } from '../../domain/ledger/JournalEntry.ts';
-import { assertDoubleEntryInvariant, verifyDoubleEntryInvariant } from '../../domain/ledger/LedgerInvariant.ts';
+import { assertDoubleEntryInvariant } from '../../domain/ledger/LedgerInvariant.ts';
 import { Money } from '../../domain/money/Money.ts';
 import { getWalletCurrencyCodesForCountry } from '../../domain/country/countryPrimaryCurrency.ts';
+import { prisma } from '../db/prisma.ts';
 
 export class LedgerService {
   private accounts: Map<string, LedgerAccount> = new Map();
   private entries: JournalEntryRecord[] = [];
+  private readyPromise: Promise<void>;
 
   constructor() {
-    this.seedDefaultAccounts();
-    this.seedBaselineJournalEntries();
+    this.readyPromise = this.bootstrap();
   }
 
-  private seedDefaultAccounts(): void {
+  public whenReady(): Promise<void> {
+    return this.readyPromise;
+  }
+
+  private async bootstrap(): Promise<void> {
+    await this.hydrateFromDatabase();
+    await this.ensureSystemSeedPersisted();
+  }
+
+  private async hydrateFromDatabase(): Promise<void> {
+    const dbAccounts = await prisma.ledgerAccount.findMany();
+    for (const row of dbAccounts) {
+      this.accounts.set(row.id, {
+        id: row.id,
+        accountNumber: row.accountNumber,
+        name: row.name,
+        type: row.type as LedgerAccount['type'],
+        classification: row.classification as LedgerAccount['classification'],
+        currency: row.currency,
+        userId: row.userId ?? undefined,
+        isActive: row.isActive,
+        isFrozen: row.isFrozen,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      });
+    }
+
+    const journals = await prisma.journalEntry.findMany({
+      include: { lines: true },
+      orderBy: [{ postedAt: 'asc' }, { entrySequence: 'asc' }],
+    });
+    this.entries = journals.map((j) => ({
+      id: j.id,
+      transactionId: j.transactionId,
+      entrySequence: j.entrySequence,
+      currency: j.currency,
+      narration: j.narration,
+      postedAt: j.postedAt,
+      lines: j.lines.map((l) => ({
+        accountId: l.accountId,
+        direction: l.direction as LedgerLineInput['direction'],
+        amountMinor: l.amountMinor,
+        description: l.description ?? undefined,
+      })),
+    }));
+  }
+
+  private buildDefaultAccounts(): LedgerAccount[] {
     const defaultAccounts = Object.entries(SYSTEM_CHART_OF_ACCOUNTS).map(([key, acc]) => ({
       id: `acc_${key.toLowerCase()}`,
       accountNumber: acc.accountNumber,
@@ -36,11 +90,7 @@ export class LedgerService {
       updatedAt: new Date('2026-01-01T00:00:00Z'),
     }));
 
-    for (const acc of defaultAccounts) {
-      this.accounts.set(acc.id, acc);
-    }
-
-    this.accounts.set('acc_equity_reserve_usd', {
+    defaultAccounts.push({
       id: 'acc_equity_reserve_usd',
       accountNumber: '3010-USD-EQUITY-CAPITAL',
       name: 'Tier-1 Capital & Statutory Reserves',
@@ -52,13 +102,12 @@ export class LedgerService {
       createdAt: new Date('2026-01-01T00:00:00Z'),
       updatedAt: new Date('2026-01-01T00:00:00Z'),
     });
+
+    return defaultAccounts;
   }
 
-  private seedBaselineJournalEntries(): void {
-    // 1. Initial Safeguarding Capitalization: $500,000.00 USD
-    // DEBIT: Safeguarding Vault Asset ($500,000.00 = 50,000,000 cents)
-    // CREDIT: Tier-1 Capital Equity ($500,000.00 = 50,000,000 cents)
-    const capEntry: JournalEntryRecord = {
+  private baselineCapitalEntry(): JournalEntryRecord {
+    return {
       id: 'je_cap_001',
       transactionId: 'tx_init_capital_2026',
       entrySequence: 1,
@@ -69,19 +118,123 @@ export class LedgerService {
         {
           accountId: 'acc_safeguarding_cash_usd',
           direction: 'DEBIT',
-          amountMinor: 50_000_000n, // $500,000.00
+          amountMinor: 50_000_000n,
           description: 'Funds received in safeguarding treasury account',
         },
         {
           accountId: 'acc_equity_reserve_usd',
           direction: 'CREDIT',
-          amountMinor: 50_000_000n, // $500,000.00
+          amountMinor: 50_000_000n,
           description: 'Capital reserve equity recognition',
         },
       ],
     };
-    assertDoubleEntryInvariant(capEntry.lines);
-    this.entries.push(capEntry);
+  }
+
+  private async ensureSystemSeedPersisted(): Promise<void> {
+    const defaults = this.buildDefaultAccounts();
+    for (const acc of defaults) {
+      if (!this.accounts.has(acc.id)) {
+        this.accounts.set(acc.id, acc);
+        await this.persistAccount(acc);
+      }
+    }
+
+    if (!this.entries.some((e) => e.id === 'je_cap_001')) {
+      const cap = this.baselineCapitalEntry();
+      assertDoubleEntryInvariant(cap.lines);
+      this.entries.push(cap);
+      await this.persistJournalEntry(cap);
+    }
+  }
+
+  public async persistAccount(account: LedgerAccount): Promise<void> {
+    const existingByNumber = await prisma.ledgerAccount.findUnique({
+      where: { accountNumber: account.accountNumber },
+    });
+    if (existingByNumber && existingByNumber.id !== account.id) {
+      // Reuse durable row if account number was allocated under a different id historically.
+      this.accounts.set(existingByNumber.id, {
+        ...account,
+        id: existingByNumber.id,
+        createdAt: existingByNumber.createdAt,
+        updatedAt: existingByNumber.updatedAt,
+      });
+      return;
+    }
+    await prisma.ledgerAccount.upsert({
+      where: { id: account.id },
+      create: {
+        id: account.id,
+        accountNumber: account.accountNumber,
+        name: account.name,
+        type: account.type as PrismaAccountType,
+        classification: account.classification as PrismaAccountClassification,
+        currency: account.currency,
+        userId: account.userId ?? null,
+        isActive: account.isActive,
+        isFrozen: account.isFrozen,
+        createdAt: account.createdAt,
+        updatedAt: account.updatedAt,
+      },
+      update: {
+        name: account.name,
+        type: account.type as PrismaAccountType,
+        classification: account.classification as PrismaAccountClassification,
+        currency: account.currency,
+        userId: account.userId ?? null,
+        isActive: account.isActive,
+        isFrozen: account.isFrozen,
+        updatedAt: account.updatedAt,
+      },
+    });
+  }
+
+  public async persistJournalEntry(entry: JournalEntryRecord): Promise<void> {
+    await prisma.$transaction(async (tx) => {
+      await tx.financialTransaction.upsert({
+        where: { id: entry.transactionId },
+        create: {
+          id: entry.transactionId,
+          referenceNumber: entry.transactionId,
+          description: entry.narration,
+          status: 'POSTED',
+          originCountry: 'US',
+          sourceType: 'LEDGER_JOURNAL',
+          postedAt: entry.postedAt,
+        },
+        update: {
+          description: entry.narration,
+          status: 'POSTED',
+          postedAt: entry.postedAt,
+        },
+      });
+
+      await tx.journalEntry.upsert({
+        where: { id: entry.id },
+        create: {
+          id: entry.id,
+          transactionId: entry.transactionId,
+          entrySequence: entry.entrySequence,
+          currency: entry.currency,
+          narration: entry.narration,
+          postedAt: entry.postedAt,
+          lines: {
+            create: entry.lines.map((line) => ({
+              id: `${entry.id}_${line.accountId}_${line.direction}`,
+              accountId: line.accountId,
+              direction: line.direction as PrismaLedgerEntryDirection,
+              amountMinor: line.amountMinor,
+              description: line.description ?? null,
+            })),
+          },
+        },
+        update: {
+          narration: entry.narration,
+          postedAt: entry.postedAt,
+        },
+      });
+    });
   }
 
   public getAccounts(): LedgerAccount[] {
@@ -112,6 +265,15 @@ export class LedgerService {
       updatedAt: new Date(),
     };
     this.accounts.set(existingId, account);
+    void this.persistAccount(account).catch((err) =>
+      console.error('[ledger] failed to persist safeguarding account:', err),
+    );
+    return account;
+  }
+
+  public async ensureSafeguardingAssetAccountDurable(currency: string): Promise<LedgerAccount> {
+    const account = this.ensureSafeguardingAssetAccount(currency);
+    await this.persistAccount(account);
     return account;
   }
 
@@ -120,7 +282,8 @@ export class LedgerService {
   }
 
   /**
-   * Posts an immutable balanced journal entry.
+   * Posts an immutable balanced journal entry to the in-memory cache.
+   * Callers that need durability must await persistJournalEntry(entry).
    */
   public postJournalEntry(input: {
     transactionId: string;
@@ -128,10 +291,8 @@ export class LedgerService {
     narration: string;
     lines: LedgerLineInput[];
   }): JournalEntryRecord {
-    // 1. Verify double entry invariant
     assertDoubleEntryInvariant(input.lines);
 
-    // 2. Validate all accounts exist and match currency
     for (const line of input.lines) {
       const account = this.accounts.get(line.accountId);
       if (!account) {
@@ -139,7 +300,7 @@ export class LedgerService {
       }
       if (account.currency !== input.currency) {
         throw new Error(
-          `Account currency mismatch: Account ${account.accountNumber} is ${account.currency}, but entry is ${input.currency}`
+          `Account currency mismatch: Account ${account.accountNumber} is ${account.currency}, but entry is ${input.currency}`,
         );
       }
       if (account.isFrozen) {
@@ -161,9 +322,18 @@ export class LedgerService {
     return newRecord;
   }
 
-  /**
-   * Calculates net balance for every account and checks global ledger invariant.
-   */
+  public async postJournalEntryDurable(input: {
+    transactionId: string;
+    currency: string;
+    narration: string;
+    lines: LedgerLineInput[];
+  }): Promise<JournalEntryRecord> {
+    await this.readyPromise;
+    const entry = this.postJournalEntry(input);
+    await this.persistJournalEntry(entry);
+    return entry;
+  }
+
   public getLedgerSummary(): {
     totalAccounts: number;
     totalEntries: number;
@@ -201,9 +371,6 @@ export class LedgerService {
       const debitMinor = debitMap.get(acc.id) ?? 0n;
       const creditMinor = creditMap.get(acc.id) ?? 0n;
 
-      // Net balance depends on account normal direction:
-      // Asset / Expense: Normal = Debit (Debit - Credit)
-      // Liability / Equity / Revenue: Normal = Credit (Credit - Debit)
       let netMinor = 0n;
       if (acc.type === 'ASSET' || acc.type === 'EXPENSE') {
         netMinor = debitMinor - creditMinor;
@@ -235,9 +402,6 @@ export class LedgerService {
     };
   }
 
-  /**
-   * Provisions customer liability accounts for the signup-country fiat corridor and Bitcoin.
-   */
   public provisionCustomerAccounts(
     userId: string,
     fullName: string,
@@ -246,12 +410,13 @@ export class LedgerService {
     const currencies = getWalletCurrencyCodesForCountry(countryCode);
     const created: LedgerAccount[] = [];
 
+    const userToken = userId.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(-16);
     for (const curr of currencies) {
       const availId = `acc_${userId}_${curr.toLowerCase()}_avail`;
       if (!this.accounts.has(availId)) {
         const availAcc: LedgerAccount = {
           id: availId,
-          accountNumber: `2100-${curr}-${userId.substring(0, 8).toUpperCase()}-AVAIL`,
+          accountNumber: `2100-${curr}-${userToken}-AVAIL`,
           name: `${fullName} (${curr} Available Wallet)`,
           type: 'LIABILITY',
           classification: 'CUSTOMER_AVAILABLE_BALANCE',
@@ -270,7 +435,7 @@ export class LedgerService {
       if (!this.accounts.has(holdId)) {
         const holdAcc: LedgerAccount = {
           id: holdId,
-          accountNumber: `2200-${curr}-${userId.substring(0, 8).toUpperCase()}-HOLD`,
+          accountNumber: `2200-${curr}-${userToken}-HOLD`,
           name: `${fullName} (${curr} Pending Hold)`,
           type: 'LIABILITY',
           classification: 'CUSTOMER_PENDING_HOLD',
@@ -289,9 +454,23 @@ export class LedgerService {
     return created;
   }
 
-  /**
-   * Computes available minor units for a specific account by summing debits & credits.
-   */
+  public async provisionCustomerAccountsDurable(
+    userId: string,
+    fullName: string,
+    countryCode = 'US',
+  ): Promise<LedgerAccount[]> {
+    await this.readyPromise;
+    const created = this.provisionCustomerAccounts(userId, fullName, countryCode);
+    for (const acc of created) {
+      await this.persistAccount(acc);
+    }
+    // Also persist any already-cached accounts for this user that may pre-exist in memory only.
+    for (const acc of this.getUserAccounts(userId)) {
+      await this.persistAccount(acc);
+    }
+    return created;
+  }
+
   public getAccountBalance(accountId: string): {
     account: LedgerAccount;
     balanceMinor: bigint;
@@ -317,10 +496,6 @@ export class LedgerService {
       }
     }
 
-    // For Liability accounts (Customer Available Balance):
-    // Balance = Credits - Debits
-    // For Asset accounts (Safeguarding Vault):
-    // Balance = Debits - Credits
     let balanceMinor = 0n;
     if (account.type === 'ASSET' || account.type === 'EXPENSE') {
       balanceMinor = debits - credits;
@@ -336,13 +511,9 @@ export class LedgerService {
     };
   }
 
-  /**
-   * Returns all ledger accounts owned by a specific customer.
-   */
   public getUserAccounts(userId: string): LedgerAccount[] {
     return Array.from(this.accounts.values()).filter((acc) => acc.userId === userId);
   }
 }
 
 export const defaultLedgerService = new LedgerService();
-

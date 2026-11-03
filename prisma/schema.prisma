@@ -240,6 +240,9 @@ model User {
   grantApplications   GrantApplication[]
   paymentCards        PaymentCard[]
   auditLogs           AuditLog[]
+  walletOperations    WalletOperation[]
+  pendingDeposits     PendingDeposit[]
+  pendingWithdrawals  PendingWithdrawal[]
 
   @@index([email])
   @@index([role])
@@ -746,4 +749,92 @@ model SupportedCurrency {
   maxDailyMinor   BigInt    @default(5000000)
 
   @@map("supported_currencies")
+}
+
+// -----------------------------------------------------------------------------
+// WALLET OPERATIONS & PENDING FUNDING QUEUES (durable customer money state)
+// -----------------------------------------------------------------------------
+
+model WalletOperation {
+  id          String   @id
+  userId      String
+  payload     String   @db.Text // JSON FinancialOperationResult
+  status      String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("wallet_operations")
+}
+
+model PendingDeposit {
+  id                    String   @id
+  userId                String
+  kind                  String
+  currency              String   @db.VarChar(6)
+  amountDecimal         String
+  amountMinor           String
+  formattedAmount       String
+  sourceRail            String?
+  fileName              String?
+  mimeType              String?
+  fileSize              Int?
+  storageRef            String?
+  submittedAt           DateTime
+  reviewedAt            DateTime?
+  reviewedByUserId      String?
+  reviewNotes           String?  @db.Text
+  status                String
+  holdJournalEntryId    String
+  referenceNumber       String   @unique
+  releaseJournalEntryId String?
+  origin                String   @default("CUSTOMER")
+  initiatedByUserId     String?
+  initiationReason      String?  @db.Text
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@index([submittedAt])
+  @@map("pending_deposits")
+}
+
+model PendingWithdrawal {
+  id                    String   @id
+  userId                String
+  kind                  String
+  currency              String   @db.VarChar(6)
+  amountDecimal         String
+  amountMinor           String
+  formattedAmount       String
+  destinationRail       String?
+  bankingDetails        String   @default("{}") @db.Text
+  btcAddress            String?
+  submittedAt           DateTime
+  reviewedAt            DateTime?
+  reviewedByUserId      String?
+  reviewNotes           String?  @db.Text
+  status                String
+  holdJournalEntryId    String
+  referenceNumber       String   @unique
+  releaseJournalEntryId String?
+  origin                String   @default("CUSTOMER")
+  initiatedByUserId     String?
+  initiationReason      String?  @db.Text
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@index([submittedAt])
+  @@map("pending_withdrawals")
 }

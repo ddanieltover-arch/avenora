@@ -46,11 +46,14 @@ interface TransactionItem {
 interface TransactionsViewProps {
   initialSearchQuery?: string | null;
   onInitialSearchConsumed?: () => void;
+  /** Called after a successful local refetch so the dashboard can stay in sync. */
+  onActivity?: () => void;
 }
 
 export const TransactionsView: React.FC<TransactionsViewProps> = ({
   initialSearchQuery,
   onInitialSearchConsumed,
+  onActivity,
 }) => {
   const { user, token } = useAuth();
   const { t } = useLocalization();
@@ -107,6 +110,31 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
   useEffect(() => {
     fetchTransactions();
   }, [token, currencyFilter, typeFilter]);
+
+  useEffect(() => {
+    if (!token) return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void fetchTransactions();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
+  }, [token, currencyFilter, typeFilter, searchQuery]);
+
+  useEffect(() => {
+    if (!token) return;
+    const hasPending = transactions.some((tx) => tx.status === 'PENDING_REVIEW');
+    if (!hasPending) return;
+    const id = window.setInterval(() => {
+      void fetchTransactions().then(() => onActivity?.());
+    }, 8000);
+    return () => window.clearInterval(id);
+  }, [token, transactions, onActivity]);
 
   useEffect(() => {
     if (!initialSearchQuery?.trim()) return;

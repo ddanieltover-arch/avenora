@@ -82,7 +82,21 @@ export function getValidatedConfig(customEnv?: Record<string, string | undefined
     return cachedEnv;
   }
 
-  const rawEnv = customEnv ?? (typeof process !== 'undefined' ? process.env : {});
+  const rawEnv = { ...(customEnv ?? (typeof process !== 'undefined' ? process.env : {})) };
+
+  // On Vercel/production, never keep a localhost APP_URL (email CTAs, redirects, CORS).
+  const appUrl = typeof rawEnv.APP_URL === 'string' ? rawEnv.APP_URL.trim() : '';
+  const appUrlIsLocal =
+    !appUrl || /^(https?:\/\/)?(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(appUrl);
+  if (appUrlIsLocal) {
+    const vercelHost = rawEnv.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+    if (vercelHost && !/localhost|127\.0\.0\.1/i.test(vercelHost)) {
+      rawEnv.APP_URL = `https://${vercelHost.replace(/^https?:\/\//i, '').replace(/\/$/, '')}`;
+    } else if (rawEnv.VERCEL === '1' || rawEnv.NODE_ENV === 'production') {
+      rawEnv.APP_URL = 'https://avenorabank.com';
+    }
+  }
+
   const parsed = EnvSchema.safeParse(rawEnv);
 
   if (!parsed.success) {
