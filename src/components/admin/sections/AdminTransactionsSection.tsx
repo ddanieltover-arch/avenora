@@ -33,6 +33,7 @@ import {
 export interface AdminTransactionsSectionProps {
   user: any;
   loading: boolean;
+  transactionsLoadState: 'idle' | 'loading' | 'ready' | 'error';
   pendingDeposits: any[];
   pendingWithdrawals: any[];
   depositRejectId: string | null;
@@ -66,6 +67,7 @@ export interface AdminTransactionsSectionProps {
 export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> = ({
   user,
   loading,
+  transactionsLoadState,
   pendingDeposits,
   pendingWithdrawals,
   depositRejectId,
@@ -102,6 +104,10 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
     pendingWithdrawals.map((w) => [w.referenceNumber, w] as const),
   );
   const pendingFundingCount = pendingDeposits.length + pendingWithdrawals.length;
+  const boardReady = transactionsLoadState === 'ready';
+  const boardLoading =
+    transactionsLoadState === 'loading' || transactionsLoadState === 'idle' || loading;
+  const boardError = transactionsLoadState === 'error';
 
   return (
     <div className="space-y-6">
@@ -148,7 +154,13 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
                   <p className="text-xs text-brand-muted mb-4">
                     Approve to move funds from Hold to available balance. Reject to clear the hold without crediting available funds.
                   </p>
-                  {pendingDeposits.length === 0 ? (
+                  {boardLoading ? (
+                    <p className="text-xs text-slate-500 py-4 text-center">Loading pending deposits…</p>
+                  ) : boardError ? (
+                    <p className="text-xs text-rose-700 py-4 text-center">
+                      Could not load pending deposits. Use Refresh Transactions to retry.
+                    </p>
+                  ) : pendingDeposits.length === 0 ? (
                     <p className="text-xs text-slate-400 py-4 text-center">No deposits awaiting review.</p>
                   ) : (
                     <AdminTable>
@@ -256,7 +268,13 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
                   <p className="text-xs text-brand-muted mb-4">
                     Approve to pay out to the customer&apos;s destination and clear hold. Reject to return funds to available balance.
                   </p>
-                  {pendingWithdrawals.length === 0 ? (
+                  {boardLoading ? (
+                    <p className="text-xs text-slate-500 py-4 text-center">Loading pending withdrawals…</p>
+                  ) : boardError ? (
+                    <p className="text-xs text-rose-700 py-4 text-center">
+                      Could not load pending withdrawals. Use Refresh Transactions to retry.
+                    </p>
+                  ) : pendingWithdrawals.length === 0 ? (
                     <p className="text-xs text-slate-400 py-4 text-center">No withdrawals awaiting review.</p>
                   ) : (
                     <AdminTable>
@@ -399,7 +417,19 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
                         </AdminTr>
                       </AdminTableHead>
                       <AdminTableBody>
-                        {transactions.length === 0 ? (
+                        {boardLoading ? (
+                          <AdminTr>
+                            <AdminTd colSpan={7}>
+                              <AdminEmptyState title="Loading transactions…" />
+                            </AdminTd>
+                          </AdminTr>
+                        ) : boardError ? (
+                          <AdminTr>
+                            <AdminTd colSpan={7}>
+                              <AdminEmptyState title="Failed to load transactions. Use Refresh Transactions to retry." />
+                            </AdminTd>
+                          </AdminTr>
+                        ) : !boardReady || transactions.length === 0 ? (
                           <AdminTr>
                             <AdminTd colSpan={7}>
                               <AdminEmptyState title="No transactions found matching search criteria." />

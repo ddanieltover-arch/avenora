@@ -10583,22 +10583,27 @@ var WalletService = class {
   pendingDeposits = [];
   pendingWithdrawals = [];
   readyPromise;
+  /** After first successful ledger→queue rebuild in this isolate, skip repeat rebuilds. */
+  pendingQueuesSynced = false;
   constructor() {
     this.readyPromise = this.bootstrap();
   }
   whenReady() {
     return this.readyPromise;
   }
-  /** Wait for bootstrap, then re-sync approval queues from ledger holds. */
+  /** Wait for bootstrap; rebuild approval queues from ledger holds at most once per isolate. */
   async ensurePendingQueuesReady() {
     await this.readyPromise;
+    if (this.pendingQueuesSynced) return;
     await this.rebuildPendingQueuesFromLedger();
+    this.pendingQueuesSynced = true;
   }
   async bootstrap() {
     await defaultLedgerService.whenReady();
     await defaultAuthService.whenReady();
     await this.hydrateFromDatabase();
     await this.rebuildPendingQueuesFromLedger();
+    this.pendingQueuesSynced = true;
   }
   async hydrateFromDatabase() {
     const ops = await prisma.walletOperation.findMany({ orderBy: { createdAt: "desc" } });
@@ -12666,7 +12671,7 @@ var WalletService = class {
       );
     }
     const total = list.length;
-    const limit = Math.min(Math.max(params.limit || 50, 1), 100);
+    const limit = Math.min(Math.max(params.limit || 50, 1), 500);
     const offset = Math.max(params.offset || 0, 0);
     const paginated = list.slice(offset, offset + limit);
     return { total, limit, offset, transactions: paginated };
@@ -16164,6 +16169,7 @@ adminRouter.get(
     try {
       const user = req.user;
       await defaultKycService.whenReady();
+      await defaultWalletService.whenReady();
       const usersData = await defaultAuthService.getAllUsersForAdmin({
         actorRole: user.role,
         roleFilter: "CUSTOMER",
@@ -16566,6 +16572,58 @@ adminRouter.post(
     }
   }
 );
+function enrichPendingDepositForAdmin(d) {
+  const customer = defaultAuthService.getUserById(d.userId);
+  return {
+    ...d,
+    submittedAt: d.submittedAt.toISOString(),
+    reviewedAt: d.reviewedAt?.toISOString(),
+    customerEmail: customer?.email,
+    customerName: customer?.fullName
+  };
+}
+function enrichPendingWithdrawalForAdmin(w) {
+  const customer = defaultAuthService.getUserById(w.userId);
+  return {
+    ...w,
+    submittedAt: w.submittedAt.toISOString(),
+    reviewedAt: w.reviewedAt?.toISOString(),
+    customerEmail: customer?.email,
+    customerName: customer?.fullName
+  };
+}
+adminRouter.get(
+  "/funding-board",
+  authenticate,
+  requireRoles(["SUPPORT", "COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"]),
+  async (req, res, next) => {
+    try {
+      await defaultWalletService.ensurePendingQueuesReady();
+      const { search, status, currency, type, limit, offset } = req.query;
+      const deposits = defaultWalletService.getPendingDepositsForAdmin({ actorRole: req.user.role }).map(enrichPendingDepositForAdmin);
+      const withdrawals = defaultWalletService.getPendingWithdrawalsForAdmin({ actorRole: req.user.role }).map(enrichPendingWithdrawalForAdmin);
+      const txResult = defaultWalletService.getAllTransactionsForAdmin({
+        actorRole: req.user.role,
+        search: search ? String(search) : void 0,
+        status: status ? String(status) : void 0,
+        currency: currency ? String(currency) : void 0,
+        type: type ? String(type) : void 0,
+        limit: limit ? parseInt(String(limit), 10) : 200,
+        offset: offset ? parseInt(String(offset), 10) : 0
+      });
+      res.json({
+        deposits,
+        withdrawals,
+        transactions: txResult.transactions,
+        total: txResult.total,
+        limit: txResult.limit,
+        offset: txResult.offset
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 adminRouter.get(
   "/deposits/pending",
   authenticate,
@@ -16573,18 +16631,8 @@ adminRouter.get(
   async (req, res, next) => {
     try {
       await defaultWalletService.ensurePendingQueuesReady();
-      const deposits = defaultWalletService.getPendingDepositsForAdmin({ actorRole: req.user.role });
-      const enriched = deposits.map((d) => {
-        const customer = defaultAuthService.getUserById(d.userId);
-        return {
-          ...d,
-          submittedAt: d.submittedAt.toISOString(),
-          reviewedAt: d.reviewedAt?.toISOString(),
-          customerEmail: customer?.email,
-          customerName: customer?.fullName
-        };
-      });
-      res.json({ total: enriched.length, deposits: enriched });
+      const deposits = defaultWalletService.getPendingDepositsForAdmin({ actorRole: req.user.role }).map(enrichPendingDepositForAdmin);
+      res.json({ total: deposits.length, deposits });
     } catch (err) {
       next(err);
     }
@@ -16655,18 +16703,8 @@ adminRouter.get(
   async (req, res, next) => {
     try {
       await defaultWalletService.ensurePendingQueuesReady();
-      const withdrawals = defaultWalletService.getPendingWithdrawalsForAdmin({ actorRole: req.user.role });
-      const enriched = withdrawals.map((w) => {
-        const customer = defaultAuthService.getUserById(w.userId);
-        return {
-          ...w,
-          submittedAt: w.submittedAt.toISOString(),
-          reviewedAt: w.reviewedAt?.toISOString(),
-          customerEmail: customer?.email,
-          customerName: customer?.fullName
-        };
-      });
-      res.json({ total: enriched.length, withdrawals: enriched });
+      const withdrawals = defaultWalletService.getPendingWithdrawalsForAdmin({ actorRole: req.user.role }).map(enrichPendingWithdrawalForAdmin);
+      res.json({ total: withdrawals.length, withdrawals });
     } catch (err) {
       next(err);
     }

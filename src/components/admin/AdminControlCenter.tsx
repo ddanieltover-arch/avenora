@@ -113,6 +113,9 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
 
   // Transactions Data
   const [transactions, setTransactions] = useState<any[]>([]);
+  const [transactionsLoadState, setTransactionsLoadState] = useState<
+    'idle' | 'loading' | 'ready' | 'error'
+  >('idle');
   const [txSearch, setTxSearch] = useState('');
   const [txStatusFilter, setTxStatusFilter] = useState('ALL');
   const [selectedTx, setSelectedTx] = useState<any | null>(null);
@@ -471,22 +474,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
   };
 
   const refreshAfterMoneyMutation = async (affectedUserId?: string) => {
-    await fetchPendingDeposits();
-    await fetchPendingWithdrawals();
-    try {
-      const params = new URLSearchParams();
-      if (txSearch) params.set('search', txSearch);
-      if (txStatusFilter !== 'ALL') params.set('status', txStatusFilter);
-      const res = await fetch(`/api/v1/admin/transactions?${params.toString()}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setTransactions(data.transactions || []);
-      }
-    } catch {
-      /* non-fatal */
-    }
+    await fetchTransactions();
     void fetchOverview();
     const openCustomerId = selectedCustomer?.customer?.id as string | undefined;
     if (affectedUserId && openCustomerId && affectedUserId === openCustomerId) {
@@ -613,18 +601,27 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
     if (!token) return;
     try {
       setLoading(true);
-      await fetchPendingDeposits();
-      await fetchPendingWithdrawals();
+      setTransactionsLoadState('loading');
       const params = new URLSearchParams();
       if (txSearch) params.set('search', txSearch);
       if (txStatusFilter !== 'ALL') params.set('status', txStatusFilter);
-      const res = await fetch(`/api/v1/admin/transactions?${params.toString()}`, {
+      params.set('limit', '200');
+      const res = await fetch(`/api/v1/admin/funding-board?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.ok) {
-        const data = await res.json();
-        setTransactions(data.transactions || []);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setTransactionsLoadState('error');
+        showError(data.detail || data.title || 'Failed to load funding board and transactions');
+        return;
       }
+      setPendingDeposits(data.deposits || []);
+      setPendingWithdrawals(data.withdrawals || []);
+      setTransactions(data.transactions || []);
+      setTransactionsLoadState('ready');
+    } catch (e: any) {
+      setTransactionsLoadState('error');
+      showError(e.message || 'Failed to load funding board and transactions');
     } finally {
       setLoading(false);
     }
@@ -1216,6 +1213,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
                   <AdminTransactionsSection
                     user={user}
                     loading={loading}
+                    transactionsLoadState={transactionsLoadState}
                     pendingDeposits={pendingDeposits}
                     pendingWithdrawals={pendingWithdrawals}
                     depositRejectId={depositRejectId}

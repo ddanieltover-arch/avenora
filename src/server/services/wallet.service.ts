@@ -195,6 +195,8 @@ export class WalletService {
   private pendingDeposits: PendingDepositRecord[] = [];
   private pendingWithdrawals: PendingWithdrawalRecord[] = [];
   private readyPromise: Promise<void>;
+  /** After first successful ledger→queue rebuild in this isolate, skip repeat rebuilds. */
+  private pendingQueuesSynced = false;
 
   constructor() {
     this.readyPromise = this.bootstrap();
@@ -204,10 +206,12 @@ export class WalletService {
     return this.readyPromise;
   }
 
-  /** Wait for bootstrap, then re-sync approval queues from ledger holds. */
+  /** Wait for bootstrap; rebuild approval queues from ledger holds at most once per isolate. */
   public async ensurePendingQueuesReady(): Promise<void> {
     await this.readyPromise;
+    if (this.pendingQueuesSynced) return;
     await this.rebuildPendingQueuesFromLedger();
+    this.pendingQueuesSynced = true;
   }
 
   private async bootstrap(): Promise<void> {
@@ -215,6 +219,7 @@ export class WalletService {
     await defaultAuthService.whenReady();
     await this.hydrateFromDatabase();
     await this.rebuildPendingQueuesFromLedger();
+    this.pendingQueuesSynced = true;
   }
 
   private async hydrateFromDatabase(): Promise<void> {
@@ -2724,7 +2729,7 @@ export class WalletService {
     }
 
     const total = list.length;
-    const limit = Math.min(Math.max(params.limit || 50, 1), 100);
+    const limit = Math.min(Math.max(params.limit || 50, 1), 500);
     const offset = Math.max(params.offset || 0, 0);
     const paginated = list.slice(offset, offset + limit);
 

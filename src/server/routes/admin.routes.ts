@@ -111,6 +111,7 @@ adminRouter.get(
     try {
       const user = req.user!;
       await defaultKycService.whenReady();
+      await defaultWalletService.whenReady();
 
       // 1. Customers (CUSTOMER role only — never count staff as customers)
       const usersData = await defaultAuthService.getAllUsersForAdmin({
@@ -616,6 +617,73 @@ adminRouter.post(
   }
 );
 
+function enrichPendingDepositForAdmin(d: ReturnType<typeof defaultWalletService.getPendingDepositsForAdmin>[number]) {
+  const customer = defaultAuthService.getUserById(d.userId);
+  return {
+    ...d,
+    submittedAt: d.submittedAt.toISOString(),
+    reviewedAt: d.reviewedAt?.toISOString(),
+    customerEmail: customer?.email,
+    customerName: customer?.fullName,
+  };
+}
+
+function enrichPendingWithdrawalForAdmin(
+  w: ReturnType<typeof defaultWalletService.getPendingWithdrawalsForAdmin>[number],
+) {
+  const customer = defaultAuthService.getUserById(w.userId);
+  return {
+    ...w,
+    submittedAt: w.submittedAt.toISOString(),
+    reviewedAt: w.reviewedAt?.toISOString(),
+    customerEmail: customer?.email,
+    customerName: customer?.fullName,
+  };
+}
+
+/**
+ * GET /api/v1/admin/funding-board
+ * Single cold-start-safe payload: pending deposits, withdrawals, and transaction history.
+ */
+adminRouter.get(
+  '/funding-board',
+  authenticate,
+  requireRoles(['SUPPORT', 'COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN']),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await defaultWalletService.ensurePendingQueuesReady();
+      const { search, status, currency, type, limit, offset } = req.query;
+
+      const deposits = defaultWalletService
+        .getPendingDepositsForAdmin({ actorRole: req.user!.role })
+        .map(enrichPendingDepositForAdmin);
+      const withdrawals = defaultWalletService
+        .getPendingWithdrawalsForAdmin({ actorRole: req.user!.role })
+        .map(enrichPendingWithdrawalForAdmin);
+      const txResult = defaultWalletService.getAllTransactionsForAdmin({
+        actorRole: req.user!.role,
+        search: search ? String(search) : undefined,
+        status: status ? String(status) : undefined,
+        currency: currency ? String(currency) : undefined,
+        type: type ? String(type) : undefined,
+        limit: limit ? parseInt(String(limit), 10) : 200,
+        offset: offset ? parseInt(String(offset), 10) : 0,
+      });
+
+      res.json({
+        deposits,
+        withdrawals,
+        transactions: txResult.transactions,
+        total: txResult.total,
+        limit: txResult.limit,
+        offset: txResult.offset,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 /**
  * GET /api/v1/admin/deposits/pending
  * Fiat and BTC deposit requests awaiting approval (customer hold balance).
@@ -627,18 +695,10 @@ adminRouter.get(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       await defaultWalletService.ensurePendingQueuesReady();
-      const deposits = defaultWalletService.getPendingDepositsForAdmin({ actorRole: req.user!.role });
-      const enriched = deposits.map((d) => {
-        const customer = defaultAuthService.getUserById(d.userId);
-        return {
-          ...d,
-          submittedAt: d.submittedAt.toISOString(),
-          reviewedAt: d.reviewedAt?.toISOString(),
-          customerEmail: customer?.email,
-          customerName: customer?.fullName,
-        };
-      });
-      res.json({ total: enriched.length, deposits: enriched });
+      const deposits = defaultWalletService
+        .getPendingDepositsForAdmin({ actorRole: req.user!.role })
+        .map(enrichPendingDepositForAdmin);
+      res.json({ total: deposits.length, deposits });
     } catch (err) {
       next(err);
     }
@@ -717,18 +777,10 @@ adminRouter.get(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       await defaultWalletService.ensurePendingQueuesReady();
-      const withdrawals = defaultWalletService.getPendingWithdrawalsForAdmin({ actorRole: req.user!.role });
-      const enriched = withdrawals.map((w) => {
-        const customer = defaultAuthService.getUserById(w.userId);
-        return {
-          ...w,
-          submittedAt: w.submittedAt.toISOString(),
-          reviewedAt: w.reviewedAt?.toISOString(),
-          customerEmail: customer?.email,
-          customerName: customer?.fullName,
-        };
-      });
-      res.json({ total: enriched.length, withdrawals: enriched });
+      const withdrawals = defaultWalletService
+        .getPendingWithdrawalsForAdmin({ actorRole: req.user!.role })
+        .map(enrichPendingWithdrawalForAdmin);
+      res.json({ total: withdrawals.length, withdrawals });
     } catch (err) {
       next(err);
     }
