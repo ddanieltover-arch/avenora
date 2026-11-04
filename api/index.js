@@ -8318,9 +8318,7 @@ function centralErrorHandler(err, req, res, _next) {
     type: "https://avenora.com/errors/internal-server-error",
     title: "Internal Server Error",
     status: 500,
-    // Temporarily expose cause so production wallet/admin 500s are diagnosable.
-    // Revert to the opaque message once the funding-board failure is fixed.
-    detail: isProduction ? `An unexpected internal system error occurred. Please reference correlation ID. Cause: ${errorMessage}` : errorMessage,
+    detail: isProduction ? "An unexpected internal system error occurred. Please reference correlation ID." : errorMessage,
     instance,
     correlationId,
     timestamp
