@@ -18,7 +18,7 @@ import { JournalEntryRecord, LedgerLineInput } from '../../domain/ledger/Journal
 import { assertDoubleEntryInvariant } from '../../domain/ledger/LedgerInvariant.ts';
 import { Money } from '../../domain/money/Money.ts';
 import { getWalletCurrencyCodesForCountry } from '../../domain/country/countryPrimaryCurrency.ts';
-import { prisma } from '../db/prisma.ts';
+import { prisma, prismaDelegate } from '../db/prisma.ts';
 
 export class LedgerService {
   private accounts: Map<string, LedgerAccount> = new Map();
@@ -34,12 +34,20 @@ export class LedgerService {
   }
 
   private async bootstrap(): Promise<void> {
-    await this.hydrateFromDatabase();
-    await this.ensureSystemSeedPersisted();
+    try {
+      await this.hydrateFromDatabase();
+    } catch (err) {
+      console.error('[ledger] hydrateFromDatabase failed; continuing with in-memory seed:', err);
+    }
+    try {
+      await this.ensureSystemSeedPersisted();
+    } catch (err) {
+      console.error('[ledger] ensureSystemSeedPersisted failed:', err);
+    }
   }
 
   private async hydrateFromDatabase(): Promise<void> {
-    const dbAccounts = await prisma.ledgerAccount.findMany();
+    const dbAccounts = await prismaDelegate('ledgerAccount', prisma.ledgerAccount).findMany();
     for (const row of dbAccounts) {
       this.accounts.set(row.id, {
         id: row.id,
@@ -56,7 +64,7 @@ export class LedgerService {
       });
     }
 
-    const journals = await prisma.journalEntry.findMany({
+    const journals = await prismaDelegate('journalEntry', prisma.journalEntry).findMany({
       include: { lines: true },
       orderBy: [{ postedAt: 'asc' }, { entrySequence: 'asc' }],
     });

@@ -688,6 +688,15 @@ var init_countryPrimaryCurrency = __esm({
 });
 
 // src/server/db/prisma.ts
+function prismaDelegate(name, delegate) {
+  if (!delegate || typeof delegate.findMany !== "function") {
+    const available = Object.keys(prisma).filter((k) => !k.startsWith("$") && !k.startsWith("_")).sort().join(",");
+    throw new Error(
+      `Prisma delegate "${name}" is unavailable (stale generated client). Available: [${available}]. Run prisma generate and redeploy.`
+    );
+  }
+  return delegate;
+}
 var import_client, globalForPrisma, prisma;
 var init_prisma = __esm({
   "src/server/db/prisma.ts"() {
@@ -722,11 +731,19 @@ var init_ledger_service = __esm({
         return this.readyPromise;
       }
       async bootstrap() {
-        await this.hydrateFromDatabase();
-        await this.ensureSystemSeedPersisted();
+        try {
+          await this.hydrateFromDatabase();
+        } catch (err) {
+          console.error("[ledger] hydrateFromDatabase failed; continuing with in-memory seed:", err);
+        }
+        try {
+          await this.ensureSystemSeedPersisted();
+        } catch (err) {
+          console.error("[ledger] ensureSystemSeedPersisted failed:", err);
+        }
       }
       async hydrateFromDatabase() {
-        const dbAccounts = await prisma.ledgerAccount.findMany();
+        const dbAccounts = await prismaDelegate("ledgerAccount", prisma.ledgerAccount).findMany();
         for (const row of dbAccounts) {
           this.accounts.set(row.id, {
             id: row.id,
@@ -742,7 +759,7 @@ var init_ledger_service = __esm({
             updatedAt: row.updatedAt
           });
         }
-        const journals = await prisma.journalEntry.findMany({
+        const journals = await prismaDelegate("journalEntry", prisma.journalEntry).findMany({
           include: { lines: true },
           orderBy: [{ postedAt: "asc" }, { entrySequence: "asc" }]
         });
@@ -10627,7 +10644,11 @@ var WalletService = class {
   async bootstrap() {
     await defaultLedgerService.whenReady();
     await defaultAuthService.whenReady();
-    await this.hydrateFromDatabase();
+    try {
+      await this.hydrateFromDatabase();
+    } catch (err) {
+      console.error("[wallet] hydrateFromDatabase failed; continuing with empty queues:", err);
+    }
     try {
       await this.rebuildPendingQueuesFromLedger();
       this.pendingQueuesSynced = true;
@@ -10636,7 +10657,9 @@ var WalletService = class {
     }
   }
   async hydrateFromDatabase() {
-    const ops = await prisma.walletOperation.findMany({ orderBy: { createdAt: "desc" } });
+    const ops = await prismaDelegate("walletOperation", prisma.walletOperation).findMany({
+      orderBy: { createdAt: "desc" }
+    });
     this.transactionHistory = [];
     for (const row of ops) {
       try {
@@ -10645,7 +10668,7 @@ var WalletService = class {
       } catch {
       }
     }
-    const deposits = await prisma.pendingDeposit.findMany();
+    const deposits = await prismaDelegate("pendingDeposit", prisma.pendingDeposit).findMany();
     this.pendingDeposits = deposits.map((d) => ({
       id: d.id,
       userId: d.userId,
@@ -10671,7 +10694,7 @@ var WalletService = class {
       initiatedByUserId: d.initiatedByUserId ?? void 0,
       initiationReason: d.initiationReason ?? void 0
     }));
-    const withdrawals = await prisma.pendingWithdrawal.findMany();
+    const withdrawals = await prismaDelegate("pendingWithdrawal", prisma.pendingWithdrawal).findMany();
     this.pendingWithdrawals = withdrawals.map((w) => {
       let bankingDetails = {};
       try {
@@ -10703,7 +10726,7 @@ var WalletService = class {
         initiationReason: w.initiationReason ?? void 0
       };
     });
-    const idem = await prisma.idempotencyRecord.findMany({
+    const idem = await prismaDelegate("idempotencyRecord", prisma.idempotencyRecord).findMany({
       where: { expiresAt: { gt: /* @__PURE__ */ new Date() } }
     });
     for (const row of idem) {
@@ -10720,7 +10743,7 @@ var WalletService = class {
       } catch {
       }
     }
-    const quotes = await prisma.fxQuote.findMany({
+    const quotes = await prismaDelegate("fxQuote", prisma.fxQuote).findMany({
       where: { expiresAt: { gt: /* @__PURE__ */ new Date() }, isExecuted: false }
     });
     for (const q of quotes) {

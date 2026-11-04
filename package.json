@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && npm run build:api",
+    "postinstall": "prisma generate",
+    "build": "prisma generate && vite build && npm run build:api",
     "build:api": "node scripts/bundle-api.mjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js api/index.js",
@@ -20,6 +21,7 @@
   "dependencies": {
     "@google/genai": "^2.4.0",
     "@prisma/client": "^6.19.0",
+    "prisma": "^6.19.0",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.1",
     "cookie-parser": "^1.4.7",
@@ -43,7 +45,6 @@
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.28.0",
-    "prisma": "^6.19.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",

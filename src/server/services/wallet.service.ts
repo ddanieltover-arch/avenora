@@ -36,7 +36,7 @@ import {
   illustrativeLocalUnitsPerUsd,
   illustrativeUsdPerLocalUnit,
 } from '../../lib/illustrativeUsdRates.ts';
-import { prisma } from '../db/prisma.ts';
+import { prisma, prismaDelegate } from '../db/prisma.ts';
 
 export interface WalletAccountView {
   id: string;
@@ -236,7 +236,11 @@ export class WalletService {
   private async bootstrap(): Promise<void> {
     await defaultLedgerService.whenReady();
     await defaultAuthService.whenReady();
-    await this.hydrateFromDatabase();
+    try {
+      await this.hydrateFromDatabase();
+    } catch (err) {
+      console.error('[wallet] hydrateFromDatabase failed; continuing with empty queues:', err);
+    }
     try {
       await this.rebuildPendingQueuesFromLedger();
       this.pendingQueuesSynced = true;
@@ -247,7 +251,9 @@ export class WalletService {
   }
 
   private async hydrateFromDatabase(): Promise<void> {
-    const ops = await prisma.walletOperation.findMany({ orderBy: { createdAt: 'desc' } });
+    const ops = await prismaDelegate('walletOperation', prisma.walletOperation).findMany({
+      orderBy: { createdAt: 'desc' },
+    });
     this.transactionHistory = [];
     for (const row of ops) {
       try {
@@ -258,7 +264,7 @@ export class WalletService {
       }
     }
 
-    const deposits = await prisma.pendingDeposit.findMany();
+    const deposits = await prismaDelegate('pendingDeposit', prisma.pendingDeposit).findMany();
     this.pendingDeposits = deposits.map((d) => ({
       id: d.id,
       userId: d.userId,
@@ -285,7 +291,7 @@ export class WalletService {
       initiationReason: d.initiationReason ?? undefined,
     }));
 
-    const withdrawals = await prisma.pendingWithdrawal.findMany();
+    const withdrawals = await prismaDelegate('pendingWithdrawal', prisma.pendingWithdrawal).findMany();
     this.pendingWithdrawals = withdrawals.map((w) => {
       let bankingDetails: Record<string, string> = {};
       try {
@@ -318,7 +324,7 @@ export class WalletService {
       };
     });
 
-    const idem = await prisma.idempotencyRecord.findMany({
+    const idem = await prismaDelegate('idempotencyRecord', prisma.idempotencyRecord).findMany({
       where: { expiresAt: { gt: new Date() } },
     });
     for (const row of idem) {
@@ -337,7 +343,7 @@ export class WalletService {
       }
     }
 
-    const quotes = await prisma.fxQuote.findMany({
+    const quotes = await prismaDelegate('fxQuote', prisma.fxQuote).findMany({
       where: { expiresAt: { gt: new Date() }, isExecuted: false },
     });
     for (const q of quotes) {
