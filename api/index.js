@@ -8291,11 +8291,19 @@ function centralErrorHandler(err, req, res, _next) {
     return;
   }
   const isProduction = process.env.NODE_ENV === "production";
+  console.error("[centralErrorHandler]", {
+    correlationId,
+    instance,
+    message: errorMessage,
+    stack: err instanceof Error ? err.stack : void 0
+  });
   const response = {
     type: "https://avenora.com/errors/internal-server-error",
     title: "Internal Server Error",
     status: 500,
-    detail: isProduction ? "An unexpected internal system error occurred. Please reference correlation ID." : errorMessage,
+    // Temporarily expose cause so production wallet/admin 500s are diagnosable.
+    // Revert to the opaque message once the funding-board failure is fixed.
+    detail: isProduction ? `An unexpected internal system error occurred. Please reference correlation ID. Cause: ${errorMessage}` : errorMessage,
     instance,
     correlationId,
     timestamp
