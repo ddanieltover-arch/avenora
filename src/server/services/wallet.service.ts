@@ -208,18 +208,42 @@ export class WalletService {
 
   /** Wait for bootstrap; rebuild approval queues from ledger holds at most once per isolate. */
   public async ensurePendingQueuesReady(): Promise<void> {
-    await this.readyPromise;
+    try {
+      await this.readyPromise;
+    } catch (err) {
+      // Bootstrap may fail on a transient DB blip; recover enough to serve admin queues.
+      console.error('[wallet] bootstrap rejected; recovering from hydrate:', err);
+      try {
+        await defaultLedgerService.whenReady();
+        await defaultAuthService.whenReady();
+        await this.hydrateFromDatabase();
+      } catch (hydrateErr) {
+        console.error('[wallet] recovery hydrate failed:', hydrateErr);
+        throw hydrateErr;
+      }
+    }
     if (this.pendingQueuesSynced) return;
-    await this.rebuildPendingQueuesFromLedger();
-    this.pendingQueuesSynced = true;
+    try {
+      await this.rebuildPendingQueuesFromLedger();
+    } catch (err) {
+      console.error('[wallet] pending queue rebuild failed:', err);
+    } finally {
+      // Avoid infinite rebuild loops / cold-start timeouts on every admin request.
+      this.pendingQueuesSynced = true;
+    }
   }
 
   private async bootstrap(): Promise<void> {
     await defaultLedgerService.whenReady();
     await defaultAuthService.whenReady();
     await this.hydrateFromDatabase();
-    await this.rebuildPendingQueuesFromLedger();
-    this.pendingQueuesSynced = true;
+    try {
+      await this.rebuildPendingQueuesFromLedger();
+      this.pendingQueuesSynced = true;
+    } catch (err) {
+      // Keep whenReady() resolved so overview/transactions can still load hydrated state.
+      console.error('[wallet] pending queue rebuild failed during bootstrap:', err);
+    }
   }
 
   private async hydrateFromDatabase(): Promise<void> {
@@ -241,15 +265,15 @@ export class WalletService {
       kind: d.kind as PendingDepositKind,
       currency: d.currency,
       amountDecimal: d.amountDecimal,
-      amountMinor: d.amountMinor,
+      amountMinor: String(d.amountMinor),
       formattedAmount: d.formattedAmount,
       sourceRail: d.sourceRail ?? undefined,
       fileName: d.fileName ?? undefined,
       mimeType: d.mimeType ?? undefined,
       fileSize: d.fileSize ?? undefined,
       storageRef: d.storageRef ?? undefined,
-      submittedAt: d.submittedAt,
-      reviewedAt: d.reviewedAt ?? undefined,
+      submittedAt: this.normalizeSubmittedAt(d.submittedAt),
+      reviewedAt: d.reviewedAt ? this.normalizeSubmittedAt(d.reviewedAt) : undefined,
       reviewedByUserId: d.reviewedByUserId ?? undefined,
       reviewNotes: d.reviewNotes ?? undefined,
       status: d.status as PendingDepositStatus,
@@ -275,13 +299,13 @@ export class WalletService {
         kind: w.kind as PendingWithdrawalKind,
         currency: w.currency,
         amountDecimal: w.amountDecimal,
-        amountMinor: w.amountMinor,
+        amountMinor: String(w.amountMinor),
         formattedAmount: w.formattedAmount,
         destinationRail: w.destinationRail ?? undefined,
         bankingDetails,
         btcAddress: w.btcAddress ?? undefined,
-        submittedAt: w.submittedAt,
-        reviewedAt: w.reviewedAt ?? undefined,
+        submittedAt: this.normalizeSubmittedAt(w.submittedAt),
+        reviewedAt: w.reviewedAt ? this.normalizeSubmittedAt(w.reviewedAt) : undefined,
         reviewedByUserId: w.reviewedByUserId ?? undefined,
         reviewNotes: w.reviewNotes ?? undefined,
         status: w.status as PendingWithdrawalStatus,
@@ -334,6 +358,27 @@ export class WalletService {
     }
   }
 
+  private submittedAtTime(value: Date | string | null | undefined): number {
+    if (value instanceof Date) {
+      const t = value.getTime();
+      return Number.isNaN(t) ? 0 : t;
+    }
+    if (typeof value === 'string' && value) {
+      const t = new Date(value).getTime();
+      return Number.isNaN(t) ? 0 : t;
+    }
+    return 0;
+  }
+
+  private normalizeSubmittedAt(value: Date | string | null | undefined): Date {
+    if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+    if (typeof value === 'string' && value) {
+      const parsed = new Date(value);
+      if (!Number.isNaN(parsed.getTime())) return parsed;
+    }
+    return new Date(0);
+  }
+
   /**
    * Ledger hold postings can outlive pending_* rows (serverless cold starts / failed queue writes).
    * Rebuild APPROVAL queue entries from still-pending hold journal history so Approve/Reject works.
@@ -347,7 +392,15 @@ export class WalletService {
     }
 
     for (const userId of userIds) {
-      for (const tx of this.buildLedgerBackedHistory(userId)) {
+      let history: FinancialOperationResult[];
+      try {
+        history = this.buildLedgerBackedHistory(userId);
+      } catch (err) {
+        console.error('[wallet] buildLedgerBackedHistory failed for', userId, err);
+        continue;
+      }
+
+      for (const tx of history) {
         if (tx.status !== 'PENDING_REVIEW' || !tx.userId) continue;
 
         const narration = (tx.narration || '').toLowerCase();
@@ -356,6 +409,7 @@ export class WalletService {
           narration.includes('admin funding') ||
           narration.includes('admin debit') ||
           narration.includes('admin adjustment');
+        const userExists = !!defaultAuthService.getUserById(tx.userId);
 
         if (
           tx.operationType === 'SIMULATED_DEPOSIT' &&
@@ -364,31 +418,37 @@ export class WalletService {
             narration.includes('pending'))
         ) {
           if (existingDepRefs.has(tx.referenceNumber)) continue;
-          const money = Money.fromMinor(tx.amountMinor, tx.currency);
-          const record: PendingDepositRecord = {
-            id: `dep_rebuild_${tx.journalEntryId}`,
-            userId: tx.userId,
-            kind: 'FIAT',
-            currency: tx.currency,
-            amountDecimal: money.toDecimalString(),
-            amountMinor: tx.amountMinor,
-            formattedAmount: tx.formattedAmount,
-            sourceRail: isAdminOrigin ? 'ADMIN_FUNDING' : undefined,
-            submittedAt: new Date(tx.timestamp),
-            status: 'PENDING_REVIEW',
-            holdJournalEntryId: tx.journalEntryId,
-            referenceNumber: tx.referenceNumber,
-            origin: isAdminOrigin ? 'ADMIN' : 'CUSTOMER',
-            initiationReason: isAdminOrigin
-              ? 'Admin funding credit (restored from ledger hold)'
-              : 'Deposit hold restored from ledger',
-          };
-          this.pendingDeposits.push(record);
-          existingDepRefs.add(record.referenceNumber);
           try {
-            await this.persistPendingDeposit(record);
+            const money = Money.fromMinor(tx.amountMinor, tx.currency);
+            const record: PendingDepositRecord = {
+              id: `dep_rebuild_${tx.journalEntryId}`,
+              userId: tx.userId,
+              kind: 'FIAT',
+              currency: tx.currency,
+              amountDecimal: money.toDecimalString(),
+              amountMinor: String(tx.amountMinor),
+              formattedAmount: tx.formattedAmount,
+              sourceRail: isAdminOrigin ? 'ADMIN_FUNDING' : undefined,
+              submittedAt: this.normalizeSubmittedAt(tx.timestamp),
+              status: 'PENDING_REVIEW',
+              holdJournalEntryId: tx.journalEntryId,
+              referenceNumber: tx.referenceNumber,
+              origin: isAdminOrigin ? 'ADMIN' : 'CUSTOMER',
+              initiationReason: isAdminOrigin
+                ? 'Admin funding credit (restored from ledger hold)'
+                : 'Deposit hold restored from ledger',
+            };
+            this.pendingDeposits.push(record);
+            existingDepRefs.add(record.referenceNumber);
+            if (userExists) {
+              try {
+                await this.persistPendingDeposit(record);
+              } catch (err) {
+                console.error('[wallet] failed to persist rebuilt pending deposit:', err);
+              }
+            }
           } catch (err) {
-            console.error('[wallet] failed to persist rebuilt pending deposit:', err);
+            console.error('[wallet] failed to rebuild pending deposit from', tx.referenceNumber, err);
           }
           continue;
         }
@@ -400,32 +460,38 @@ export class WalletService {
             narration.includes('pending'))
         ) {
           if (existingWthRefs.has(tx.referenceNumber)) continue;
-          const money = Money.fromMinor(tx.amountMinor, tx.currency);
-          const record: PendingWithdrawalRecord = {
-            id: `wth_rebuild_${tx.journalEntryId}`,
-            userId: tx.userId,
-            kind: 'FIAT',
-            currency: tx.currency,
-            amountDecimal: money.toDecimalString(),
-            amountMinor: tx.amountMinor,
-            formattedAmount: tx.formattedAmount,
-            destinationRail: isAdminOrigin ? 'ADMIN_ADJUSTMENT' : undefined,
-            bankingDetails: {},
-            submittedAt: new Date(tx.timestamp),
-            status: 'PENDING_REVIEW',
-            holdJournalEntryId: tx.journalEntryId,
-            referenceNumber: tx.referenceNumber,
-            origin: isAdminOrigin ? 'ADMIN' : 'CUSTOMER',
-            initiationReason: isAdminOrigin
-              ? 'Admin funding debit (restored from ledger hold)'
-              : 'Withdrawal hold restored from ledger',
-          };
-          this.pendingWithdrawals.push(record);
-          existingWthRefs.add(record.referenceNumber);
           try {
-            await this.persistPendingWithdrawal(record);
+            const money = Money.fromMinor(tx.amountMinor, tx.currency);
+            const record: PendingWithdrawalRecord = {
+              id: `wth_rebuild_${tx.journalEntryId}`,
+              userId: tx.userId,
+              kind: 'FIAT',
+              currency: tx.currency,
+              amountDecimal: money.toDecimalString(),
+              amountMinor: String(tx.amountMinor),
+              formattedAmount: tx.formattedAmount,
+              destinationRail: isAdminOrigin ? 'ADMIN_ADJUSTMENT' : undefined,
+              bankingDetails: {},
+              submittedAt: this.normalizeSubmittedAt(tx.timestamp),
+              status: 'PENDING_REVIEW',
+              holdJournalEntryId: tx.journalEntryId,
+              referenceNumber: tx.referenceNumber,
+              origin: isAdminOrigin ? 'ADMIN' : 'CUSTOMER',
+              initiationReason: isAdminOrigin
+                ? 'Admin funding debit (restored from ledger hold)'
+                : 'Withdrawal hold restored from ledger',
+            };
+            this.pendingWithdrawals.push(record);
+            existingWthRefs.add(record.referenceNumber);
+            if (userExists) {
+              try {
+                await this.persistPendingWithdrawal(record);
+              } catch (err) {
+                console.error('[wallet] failed to persist rebuilt pending withdrawal:', err);
+              }
+            }
           } catch (err) {
-            console.error('[wallet] failed to persist rebuilt pending withdrawal:', err);
+            console.error('[wallet] failed to rebuild pending withdrawal from', tx.referenceNumber, err);
           }
         }
       }
@@ -435,6 +501,8 @@ export class WalletService {
   private async persistWalletOperation(tx: FinancialOperationResult): Promise<void> {
     const userId = tx.userId;
     if (!userId) return;
+    // Orphan ledger holds (deleted users) must not trip FK and poison request paths.
+    if (!defaultAuthService.getUserById(userId)) return;
     await prisma.walletOperation.upsert({
       where: { id: tx.transactionId },
       create: {
@@ -454,6 +522,7 @@ export class WalletService {
   }
 
   private async persistPendingDeposit(record: PendingDepositRecord): Promise<void> {
+    if (!defaultAuthService.getUserById(record.userId)) return;
     await prisma.pendingDeposit.upsert({
       where: { id: record.id },
       create: {
@@ -494,6 +563,7 @@ export class WalletService {
   }
 
   private async persistPendingWithdrawal(record: PendingWithdrawalRecord): Promise<void> {
+    if (!defaultAuthService.getUserById(record.userId)) return;
     await prisma.pendingWithdrawal.upsert({
       where: { id: record.id },
       create: {
@@ -1395,7 +1465,7 @@ export class WalletService {
     const status = params.status ?? 'PENDING_REVIEW';
     return this.pendingDeposits
       .filter((d) => d.status === status)
-      .sort((a, b) => b.submittedAt.getTime() - a.submittedAt.getTime());
+      .sort((a, b) => this.submittedAtTime(b.submittedAt) - this.submittedAtTime(a.submittedAt));
   }
 
   private findPendingDeposit(depositIdOrRef: string): PendingDepositRecord | undefined {
@@ -1794,7 +1864,7 @@ export class WalletService {
     const status = params.status ?? 'PENDING_REVIEW';
     return this.pendingWithdrawals
       .filter((w) => w.status === status)
-      .sort((a, b) => b.submittedAt.getTime() - a.submittedAt.getTime());
+      .sort((a, b) => this.submittedAtTime(b.submittedAt) - this.submittedAtTime(a.submittedAt));
   }
 
   public async approvePendingWithdrawal(params: {
@@ -2363,13 +2433,13 @@ export class WalletService {
       operationType: 'SIMULATED_DEPOSIT',
       status: 'PENDING_REVIEW',
       currency: record.currency,
-      amountMinor: record.amountMinor,
+      amountMinor: String(record.amountMinor),
       formattedAmount: record.formattedAmount,
       journalEntryId,
       idempotencyKey: `idem_${record.id}`,
       isSimulated: true,
       authoritativeBalance: 'Pending review',
-      timestamp: record.submittedAt.toISOString(),
+      timestamp: this.normalizeSubmittedAt(record.submittedAt).toISOString(),
       userId: record.userId,
       direction: 'CREDIT',
       narration: `${record.currency} deposit pending review (${record.sourceRail || record.kind})`,
@@ -2397,13 +2467,13 @@ export class WalletService {
       operationType: 'SIMULATED_WITHDRAWAL',
       status: 'PENDING_REVIEW',
       currency: record.currency,
-      amountMinor: record.amountMinor,
+      amountMinor: String(record.amountMinor),
       formattedAmount: record.formattedAmount,
       journalEntryId,
       idempotencyKey: `idem_${record.id}`,
       isSimulated: true,
       authoritativeBalance: availFormatted,
-      timestamp: record.submittedAt.toISOString(),
+      timestamp: this.normalizeSubmittedAt(record.submittedAt).toISOString(),
       userId: record.userId,
       direction: 'DEBIT',
       narration: `${record.currency} withdrawal pending review (${record.destinationRail || record.kind})`,
@@ -2529,13 +2599,13 @@ export class WalletService {
         operationType,
         status,
         currency: entry.currency,
-        amountMinor: amountMinor.toString(),
+        amountMinor: String(amountMinor),
         formattedAmount: money.toDisplayString(),
         journalEntryId: entry.id,
         idempotencyKey: `ledger_${entry.id}`,
         isSimulated: true,
         authoritativeBalance: balanceFormatted,
-        timestamp: entry.postedAt.toISOString(),
+        timestamp: this.normalizeSubmittedAt(entry.postedAt).toISOString(),
         userId,
         direction,
         narration: entry.narration,

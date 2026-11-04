@@ -111,7 +111,7 @@ adminRouter.get(
     try {
       const user = req.user!;
       await defaultKycService.whenReady();
-      await defaultWalletService.whenReady();
+      await defaultWalletService.ensurePendingQueuesReady();
 
       // 1. Customers (CUSTOMER role only — never count staff as customers)
       const usersData = await defaultAuthService.getAllUsersForAdmin({
@@ -617,12 +617,41 @@ adminRouter.post(
   }
 );
 
+function toAdminIso(value: Date | string | null | undefined): string | undefined {
+  if (value == null) return undefined;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? undefined : value.toISOString();
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toISOString();
+}
+
 function enrichPendingDepositForAdmin(d: ReturnType<typeof defaultWalletService.getPendingDepositsForAdmin>[number]) {
   const customer = defaultAuthService.getUserById(d.userId);
   return {
-    ...d,
-    submittedAt: d.submittedAt.toISOString(),
-    reviewedAt: d.reviewedAt?.toISOString(),
+    id: d.id,
+    userId: d.userId,
+    kind: d.kind,
+    currency: d.currency,
+    amountDecimal: d.amountDecimal,
+    amountMinor: String(d.amountMinor),
+    formattedAmount: d.formattedAmount,
+    sourceRail: d.sourceRail,
+    fileName: d.fileName,
+    mimeType: d.mimeType,
+    fileSize: d.fileSize,
+    storageRef: d.storageRef,
+    submittedAt: toAdminIso(d.submittedAt) ?? new Date(0).toISOString(),
+    reviewedAt: toAdminIso(d.reviewedAt),
+    reviewedByUserId: d.reviewedByUserId,
+    reviewNotes: d.reviewNotes,
+    status: d.status,
+    holdJournalEntryId: d.holdJournalEntryId,
+    referenceNumber: d.referenceNumber,
+    releaseJournalEntryId: d.releaseJournalEntryId,
+    origin: d.origin,
+    initiatedByUserId: d.initiatedByUserId,
+    initiationReason: d.initiationReason,
     customerEmail: customer?.email,
     customerName: customer?.fullName,
   };
@@ -633,12 +662,37 @@ function enrichPendingWithdrawalForAdmin(
 ) {
   const customer = defaultAuthService.getUserById(w.userId);
   return {
-    ...w,
-    submittedAt: w.submittedAt.toISOString(),
-    reviewedAt: w.reviewedAt?.toISOString(),
+    id: w.id,
+    userId: w.userId,
+    kind: w.kind,
+    currency: w.currency,
+    amountDecimal: w.amountDecimal,
+    amountMinor: String(w.amountMinor),
+    formattedAmount: w.formattedAmount,
+    destinationRail: w.destinationRail,
+    bankingDetails: w.bankingDetails || {},
+    btcAddress: w.btcAddress,
+    submittedAt: toAdminIso(w.submittedAt) ?? new Date(0).toISOString(),
+    reviewedAt: toAdminIso(w.reviewedAt),
+    reviewedByUserId: w.reviewedByUserId,
+    reviewNotes: w.reviewNotes,
+    status: w.status,
+    holdJournalEntryId: w.holdJournalEntryId,
+    referenceNumber: w.referenceNumber,
+    releaseJournalEntryId: w.releaseJournalEntryId,
+    origin: w.origin,
+    initiatedByUserId: w.initiatedByUserId,
+    initiationReason: w.initiationReason,
     customerEmail: customer?.email,
     customerName: customer?.fullName,
   };
+}
+
+/** Express res.json throws on BigInt — coerce any stragglers before send. */
+function jsonSafe<T>(value: T): T {
+  return JSON.parse(
+    JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v)),
+  ) as T;
 }
 
 /**
@@ -654,12 +708,23 @@ adminRouter.get(
       await defaultWalletService.ensurePendingQueuesReady();
       const { search, status, currency, type, limit, offset } = req.query;
 
-      const deposits = defaultWalletService
-        .getPendingDepositsForAdmin({ actorRole: req.user!.role })
-        .map(enrichPendingDepositForAdmin);
-      const withdrawals = defaultWalletService
-        .getPendingWithdrawalsForAdmin({ actorRole: req.user!.role })
-        .map(enrichPendingWithdrawalForAdmin);
+      let deposits: ReturnType<typeof enrichPendingDepositForAdmin>[] = [];
+      let withdrawals: ReturnType<typeof enrichPendingWithdrawalForAdmin>[] = [];
+      try {
+        deposits = defaultWalletService
+          .getPendingDepositsForAdmin({ actorRole: req.user!.role })
+          .map(enrichPendingDepositForAdmin);
+      } catch (err) {
+        console.error('[admin] funding-board deposits failed:', err);
+      }
+      try {
+        withdrawals = defaultWalletService
+          .getPendingWithdrawalsForAdmin({ actorRole: req.user!.role })
+          .map(enrichPendingWithdrawalForAdmin);
+      } catch (err) {
+        console.error('[admin] funding-board withdrawals failed:', err);
+      }
+
       const txResult = defaultWalletService.getAllTransactionsForAdmin({
         actorRole: req.user!.role,
         search: search ? String(search) : undefined,
@@ -670,14 +735,16 @@ adminRouter.get(
         offset: offset ? parseInt(String(offset), 10) : 0,
       });
 
-      res.json({
-        deposits,
-        withdrawals,
-        transactions: txResult.transactions,
-        total: txResult.total,
-        limit: txResult.limit,
-        offset: txResult.offset,
-      });
+      res.json(
+        jsonSafe({
+          deposits,
+          withdrawals,
+          transactions: txResult.transactions,
+          total: txResult.total,
+          limit: txResult.limit,
+          offset: txResult.offset,
+        }),
+      );
     } catch (err) {
       next(err);
     }

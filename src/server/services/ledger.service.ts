@@ -70,7 +70,8 @@ export class LedgerService {
       lines: j.lines.map((l) => ({
         accountId: l.accountId,
         direction: l.direction as LedgerLineInput['direction'],
-        amountMinor: l.amountMinor,
+        // Prisma BigInt — normalize so Money/history never see unexpected shapes.
+        amountMinor: typeof l.amountMinor === 'bigint' ? l.amountMinor : BigInt(String(l.amountMinor)),
         description: l.description ?? undefined,
       })),
     }));
