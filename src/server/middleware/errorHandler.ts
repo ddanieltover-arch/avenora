@@ -91,7 +91,9 @@ export function centralErrorHandler(
     errorMessage.includes('Invalid MFA') ||
     errorMessage.includes('recovery code') ||
     errorMessage.includes('Unauthorized') ||
-    errorMessage.includes('unauthorized')
+    errorMessage.includes('unauthorized') ||
+    errorMessage.includes('session is invalid') ||
+    errorMessage.includes('Invalid or expired session')
   ) {
     const response: ProblemDetails = {
       type: 'https://avenora.com/errors/unauthorized',
@@ -107,7 +109,7 @@ export function centralErrorHandler(
   }
 
   // 4b. Account Lockout (423)
-  if (errorMessage.includes('temporarily locked')) {
+  if (errorMessage.includes('temporarily locked') || errorMessage.includes('account is locked')) {
     const response: ProblemDetails = {
       type: 'https://avenora.com/errors/account-locked',
       title: 'Account Locked',
@@ -143,7 +145,15 @@ export function centralErrorHandler(
   }
 
   // 4d. Resource Conflict (409)
-  if (errorMessage.includes('already exists') || errorMessage.includes('duplicate')) {
+  if (
+    errorMessage.includes('already exists') ||
+    errorMessage.includes('duplicate') ||
+    errorMessage.includes('Conflict:') ||
+    errorMessage.includes('already approved') ||
+    errorMessage.includes('already been executed') ||
+    errorMessage.includes('already been disbursed') ||
+    errorMessage.includes('Idempotency key collision')
+  ) {
     const response: ProblemDetails = {
       type: 'https://avenora.com/errors/conflict',
       title: 'Resource Conflict',
@@ -158,7 +168,15 @@ export function centralErrorHandler(
   }
 
   // 4e. Resource Not Found (404)
-  if (errorMessage.includes('not found') || errorMessage.includes('User not found')) {
+  if (
+    errorMessage.includes('not found') ||
+    errorMessage.includes('User not found') ||
+    errorMessage.includes('Customer not found') ||
+    errorMessage.includes('Card not found') ||
+    errorMessage.includes('Loan application not found') ||
+    errorMessage.includes('Grant application not found') ||
+    errorMessage.includes('KYC profile not found')
+  ) {
     const response: ProblemDetails = {
       type: 'https://avenora.com/errors/not-found',
       title: 'Resource Not Found',
@@ -173,15 +191,45 @@ export function centralErrorHandler(
   }
 
   // 4f. Bad Request / Client Validation (400)
-  if (
+  // Distinguish client-correctable business rule and domain validation errors from 500 system crashes:
+  const isClientError =
     errorMessage.includes('Password must be') ||
     errorMessage.includes('Invalid or expired') ||
     errorMessage.includes('Current password is incorrect') ||
     errorMessage.includes('Invalid verification code') ||
     errorMessage.includes('Cannot delete') ||
     errorMessage.includes('documented reason') ||
-    errorMessage.includes('not awaiting issuance')
-  ) {
+    errorMessage.includes('not awaiting issuance') ||
+    errorMessage.includes('must be') ||
+    errorMessage.includes('required') ||
+    errorMessage.includes('Invalid') ||
+    errorMessage.includes('invalid') ||
+    errorMessage.includes('Cannot') ||
+    errorMessage.includes('cannot') ||
+    errorMessage.includes('strictly greater') ||
+    errorMessage.includes('strictly positive') ||
+    errorMessage.includes('between') ||
+    errorMessage.includes('does not match') ||
+    errorMessage.includes('not valid') ||
+    errorMessage.includes('not available') ||
+    errorMessage.includes('expired') ||
+    errorMessage.includes('under review') ||
+    errorMessage.includes('exceed') ||
+    errorMessage.includes('digits') ||
+    errorMessage.includes('letter') ||
+    errorMessage.includes('Tax ID') ||
+    errorMessage.includes('SSN') ||
+    errorMessage.includes('CPF') ||
+    errorMessage.includes('DNI') ||
+    errorMessage.includes('NIE') ||
+    errorMessage.includes('insufficient') ||
+    errorMessage.includes('Insufficient') ||
+    errorMessage.includes('frozen') ||
+    errorMessage.includes('Card Declination') ||
+    errorMessage.includes('Safety guard') ||
+    errorMessage.includes('Enter a valid phone');
+
+  if (isClientError) {
     const response: ProblemDetails = {
       type: 'https://avenora.com/errors/bad-request',
       title: 'Bad Request',

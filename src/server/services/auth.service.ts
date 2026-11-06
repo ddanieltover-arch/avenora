@@ -104,8 +104,12 @@ export class AuthService {
   }
 
   private async bootstrap(): Promise<void> {
-    await this.hydrateFromDatabase();
-    await this.seedPrimaryAdminAccount();
+    try {
+      await this.hydrateFromDatabase();
+      await this.seedPrimaryAdminAccount();
+    } catch (err) {
+      console.error('[auth] bootstrap failed to hydrate from database; running in fallback mode:', err);
+    }
   }
 
   private userFromPrisma(row: PrismaUser): UserRecord {
@@ -598,23 +602,28 @@ export class AuthService {
     const cached = this.sessionsByTokenHash.get(tokenHash);
     if (cached) return cached;
 
-    const row = await prisma.session.findUnique({ where: { tokenHash } });
-    if (!row) return null;
+    try {
+      const row = await prisma.session.findUnique({ where: { tokenHash } });
+      if (!row) return null;
 
-    const session: SessionRecord = {
-      id: row.id,
-      userId: row.userId,
-      tokenHash: row.tokenHash,
-      ipAddress: row.ipAddress ?? undefined,
-      userAgent: row.userAgent ?? undefined,
-      isRevoked: row.isRevoked,
-      transactionPinUnlocked: row.transactionPinUnlocked,
-      expiresAt: row.expiresAt,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-    };
-    this.sessionsByTokenHash.set(tokenHash, session);
-    return session;
+      const session: SessionRecord = {
+        id: row.id,
+        userId: row.userId,
+        tokenHash: row.tokenHash,
+        ipAddress: row.ipAddress ?? undefined,
+        userAgent: row.userAgent ?? undefined,
+        isRevoked: row.isRevoked,
+        transactionPinUnlocked: row.transactionPinUnlocked,
+        expiresAt: row.expiresAt,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      };
+      this.sessionsByTokenHash.set(tokenHash, session);
+      return session;
+    } catch (err) {
+      console.error('[auth] failed to resolve session by token hash:', err);
+      return null;
+    }
   }
 
   /** Resolve a user from cache, falling back to Postgres when needed. */
@@ -622,12 +631,17 @@ export class AuthService {
     const cached = this.usersById.get(userId);
     if (cached) return cached;
 
-    const row = await prisma.user.findUnique({ where: { id: userId } });
-    if (!row) return null;
+    try {
+      const row = await prisma.user.findUnique({ where: { id: userId } });
+      if (!row) return null;
 
-    const user = this.userFromPrisma(row);
-    this.cachePutUser(user);
-    return user;
+      const user = this.userFromPrisma(row);
+      this.cachePutUser(user);
+      return user;
+    } catch (err) {
+      console.error('[auth] failed to resolve user by ID from database:', err);
+      return null;
+    }
   }
 
   /**
@@ -635,7 +649,11 @@ export class AuthService {
    */
   public async validateSession(sessionToken: string): Promise<UserRecord | null> {
     if (!sessionToken) return null;
-    await this.readyPromise;
+    try {
+      await this.readyPromise;
+    } catch {
+      // Continue even if initial background hydration had a delay
+    }
 
     const tokenHash = SecurityService.hashToken(sessionToken);
     const session = await this.resolveSessionByTokenHash(tokenHash);
@@ -654,6 +672,19 @@ export class AuthService {
         })
         .catch((err) => console.error('[auth] failed to revoke expired session:', err));
       return null;
+    }
+
+    // Sliding session extension: if less than 12 hours remaining, extend by 24h
+    const now = Date.now();
+    if (session.expiresAt.getTime() - now < 12 * 60 * 60 * 1000) {
+      session.expiresAt = new Date(now + this.SESSION_TTL_MS);
+      session.updatedAt = new Date();
+      void prisma.session
+        .updateMany({
+          where: { tokenHash },
+          data: { expiresAt: session.expiresAt, updatedAt: session.updatedAt },
+        })
+        .catch((err) => console.error('[auth] failed to extend active session:', err));
     }
 
     const user = await this.resolveUserById(session.userId);

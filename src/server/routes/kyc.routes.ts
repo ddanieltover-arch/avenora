@@ -83,11 +83,20 @@ const ReviewDecisionSchema = z.object({
  * GET /api/v1/kyc/me
  * Retrieves current authenticated user's verification profile (sanitized).
  */
-kycRouter.get('/me', authenticate, (req: Request, res: Response) => {
-  const profile = defaultKycService.getOrCreateProfile(req.user!.id);
-  res.json({
-    profile: defaultKycService.sanitizeForCustomer(profile),
-  });
+kycRouter.get('/me', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    try {
+      await defaultKycService.whenReady();
+    } catch {
+      // Continue even if initial background hydration had a delay
+    }
+    const profile = await defaultKycService.resolveOrCreateProfile(req.user!.id);
+    res.json({
+      profile: defaultKycService.sanitizeForCustomer(profile),
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 /**

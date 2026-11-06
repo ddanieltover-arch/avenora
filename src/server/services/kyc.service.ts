@@ -138,7 +138,11 @@ export class KycService {
   }
 
   private async bootstrap(): Promise<void> {
-    await this.hydrateFromDatabase();
+    try {
+      await this.hydrateFromDatabase();
+    } catch (err) {
+      console.error('[kyc] bootstrap failed to hydrate from database; running in fallback mode:', err);
+    }
   }
 
   private parseJsonArray<T>(raw: string | null | undefined, fallback: T[] = []): T[] {
@@ -374,6 +378,27 @@ export class KycService {
   }
 
   /**
+   * Asynchronously resolves a KYC profile from cache or Prisma database.
+   */
+  public async resolveOrCreateProfile(userId: string): Promise<KycProfileRecord> {
+    const cached = this.profilesByUserId.get(userId);
+    if (cached) return cached;
+
+    try {
+      const row = await prisma.kycProfile.findUnique({ where: { userId } });
+      if (row) {
+        const profile = this.profileFromPrismaRow(row);
+        this.profilesByUserId.set(userId, profile);
+        return profile;
+      }
+    } catch (err) {
+      console.error('[kyc] failed to resolve profile from database:', err);
+    }
+
+    return this.getOrCreateProfile(userId);
+  }
+
+  /**
    * Retrieves or initializes a KYC profile for a user.
    */
   public getOrCreateProfile(userId: string): KycProfileRecord {
@@ -393,7 +418,6 @@ export class KycService {
         updatedAt: new Date(),
       };
 
-      // Recover orphaned user.kycStatus after in-memory-only submits (pre-persistence).
       const user = defaultAuthService.getUserById(userId);
       if (user?.kycStatus === 'APPROVED') {
         profile.status = 'APPROVED';
@@ -402,14 +426,10 @@ export class KycService {
         user &&
         (user.kycStatus === 'SUBMITTED' ||
           user.kycStatus === 'UNDER_REVIEW' ||
-          user.kycStatus === 'NEEDS_MORE_INFORMATION')
+          user.kycStatus === 'NEEDS_MORE_INFORMATION' ||
+          user.kycStatus === 'REJECTED')
       ) {
-        // Documents were lost with the cold start — clear so the customer can resubmit.
-        user.kycStatus = 'NOT_STARTED';
-        user.updatedAt = new Date();
-        defaultAuthService.syncCustomerActivationFromKyc(userId);
-        defaultAuthService.saveUserSoon(userId);
-        profile.status = 'NOT_STARTED';
+        profile.status = user.kycStatus;
       }
 
       this.profilesByUserId.set(userId, profile);
@@ -449,8 +469,12 @@ export class KycService {
       previewDataUrl?: string;
     }>;
   }): Promise<KycProfileRecord> {
-    await this.readyPromise;
-    const profile = this.getOrCreateProfile(params.userId);
+    try {
+      await this.readyPromise;
+    } catch {
+      // Continue even if initial bootstrap experienced background delay
+    }
+    const profile = await this.resolveOrCreateProfile(params.userId);
 
     // Cannot submit while currently under review or already approved
     if (profile.status === 'UNDER_REVIEW') {
@@ -595,7 +619,10 @@ export class KycService {
       throw new Error('Documented notes explaining what additional information is required are mandatory.');
     }
 
-    const profile = this.profilesByUserId.get(params.targetUserId);
+    let profile = this.profilesByUserId.get(params.targetUserId);
+    if (!profile) {
+      profile = await this.resolveOrCreateProfile(params.targetUserId);
+    }
     if (!profile) {
       throw new Error(`KYC profile not found for user: ${params.targetUserId}`);
     }

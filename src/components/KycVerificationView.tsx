@@ -7,6 +7,7 @@ import React, { useState, useEffect, useMemo, useRef, useId } from 'react';
 import { useAuth } from './AuthContext.tsx';
 import {
   canonicalizeTaxIdType,
+  findTaxIdOption,
   getTaxIdOptionsForCountry,
   isTaxIdTypeAllowedForCountry,
   resolveDefaultTaxIdType,
@@ -240,7 +241,7 @@ const IdentityUploadZone: React.FC<IdentityUploadZoneProps> = ({
 };
 
 export const KycVerificationView: React.FC = () => {
-  const { user, token, refreshUser } = useAuth();
+  const { user, token, refreshUser, logout } = useAuth();
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
@@ -299,6 +300,10 @@ export const KycVerificationView: React.FC = () => {
       const res = await fetch('/api/v1/kyc/me', {
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (res.status === 401) {
+        await refreshUser();
+        return;
+      }
       const data = await res.json();
       if (res.ok && data.profile) {
         setProfile(data.profile);
@@ -543,6 +548,28 @@ export const KycVerificationView: React.FC = () => {
       return;
     }
 
+    const cleanTaxId = taxIdNumber.replace(/[\s.-]/g, '').toUpperCase();
+    if (!cleanTaxId) {
+      setFeedback({
+        success: false,
+        message: 'Tax identifier is required.',
+      });
+      return;
+    }
+
+    const matchedOption = findTaxIdOption(signupCountryCode, taxIdType);
+    if (matchedOption) {
+      const passesPattern = new RegExp(matchedOption.pattern).test(cleanTaxId);
+      const isUsSsnTier = matchedOption.code === 'US_SSN' && (/^\d{4}$/.test(cleanTaxId) || /^\d{9}$/.test(cleanTaxId));
+      if (!passesPattern && !isUsSsnTier) {
+        setFeedback({
+          success: false,
+          message: matchedOption.patternHint || `Please enter a valid ${matchedOption.label}.`,
+        });
+        return;
+      }
+    }
+
     if (governmentIdNeedsFrontAndBack) {
       if (!slotHasFile(govFrontSlot) || !slotHasFile(govBackSlot)) {
         setFeedback({
@@ -608,6 +635,17 @@ export const KycVerificationView: React.FC = () => {
         setFeedback(null);
         await fetchProfile();
         refreshUser();
+      } else if (
+        res.status === 401 ||
+        /session is invalid|expired|has been revoked|authentication required/i.test(
+          data.detail || data.title || rawText,
+        )
+      ) {
+        setFeedback({
+          success: false,
+          message: 'Your session has expired or is invalid. Please sign in again.',
+        });
+        await logout();
       } else if (
         res.status === 413 ||
         /entity too large|payload too large|request entity/i.test(rawText)
@@ -726,8 +764,19 @@ export const KycVerificationView: React.FC = () => {
         </div>
 
         {feedback && !feedback.success && (
-          <div className="p-3 rounded-xl border text-xs bg-rose-950/30 border-rose-500/40 text-rose-300">
-            {feedback.message}
+          <div className="flex items-start justify-between gap-3 p-3 rounded-xl border text-xs bg-rose-950/40 border-rose-500/50 text-rose-200">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <span>{feedback.message}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setFeedback(null)}
+              className="text-rose-400 hover:text-white p-0.5 rounded cursor-pointer shrink-0"
+              aria-label="Dismiss error"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           </div>
         )}
       </div>

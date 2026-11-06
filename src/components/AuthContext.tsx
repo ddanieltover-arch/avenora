@@ -89,11 +89,25 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 const SESSION_TOKEN_STORAGE_KEY = 'avenora_session_token';
 
+function getStoredSessionToken(): string | null {
+  try {
+    return sessionStorage.getItem(SESSION_TOKEN_STORAGE_KEY) || localStorage.getItem(SESSION_TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
 function persistSessionToken(sessionToken: string | null) {
-  if (sessionToken) {
-    sessionStorage.setItem(SESSION_TOKEN_STORAGE_KEY, sessionToken);
-  } else {
-    sessionStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
+  try {
+    if (sessionToken) {
+      sessionStorage.setItem(SESSION_TOKEN_STORAGE_KEY, sessionToken);
+      localStorage.setItem(SESSION_TOKEN_STORAGE_KEY, sessionToken);
+    } else {
+      sessionStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
+      localStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    /* ignore storage errors on restricted web contexts */
   }
 }
 
@@ -105,7 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const restoreSession = async () => {
-      const savedToken = sessionStorage.getItem(SESSION_TOKEN_STORAGE_KEY);
+      const savedToken = getStoredSessionToken();
       if (!savedToken) {
         setLoading(false);
         return;
@@ -123,12 +137,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } else {
           persistSessionToken(null);
           setToken(null);
+          setUser(null);
           setTransactionPinUnlocked(false);
         }
       } catch (err) {
         console.error('Failed to restore session', err);
         persistSessionToken(null);
         setToken(null);
+        setUser(null);
         setTransactionPinUnlocked(false);
       } finally {
         setLoading(false);
@@ -222,7 +238,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const verifyTransactionPin = async (pin: string) => {
-    const activeToken = token || sessionStorage.getItem(SESSION_TOKEN_STORAGE_KEY);
+    const activeToken = token || getStoredSessionToken();
     if (!activeToken) throw new Error('Not authenticated');
     const res = await fetch('/api/v1/auth/verify-transaction-pin', {
       method: 'POST',
@@ -244,10 +260,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const refreshUser = useCallback(async () => {
-    if (!token) return;
+    const activeToken = token || getStoredSessionToken();
+    if (!activeToken) return;
     try {
       const res = await fetch('/api/v1/auth/me', {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${activeToken}` },
       });
       const data = await readApiJson(res);
       if (res.ok && data.user) {
@@ -255,6 +272,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (typeof data.transactionPinUnlocked === 'boolean') {
           setTransactionPinUnlocked(data.transactionPinUnlocked);
         }
+      } else if (res.status === 401) {
+        // Session token has expired on server; cleanly invalidate client session
+        persistSessionToken(null);
+        setToken(null);
+        setUser(null);
+        setTransactionPinUnlocked(false);
       }
     } catch (err) {
       console.error('Failed to refresh user profile', err);

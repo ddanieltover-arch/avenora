@@ -6371,7 +6371,11 @@ var init_kyc_service = __esm({
         return this.readyPromise;
       }
       async bootstrap() {
-        await this.hydrateFromDatabase();
+        try {
+          await this.hydrateFromDatabase();
+        } catch (err) {
+          console.error("[kyc] bootstrap failed to hydrate from database; running in fallback mode:", err);
+        }
       }
       parseJsonArray(raw, fallback = []) {
         if (!raw) return fallback;
@@ -6560,6 +6564,24 @@ var init_kyc_service = __esm({
         );
       }
       /**
+       * Asynchronously resolves a KYC profile from cache or Prisma database.
+       */
+      async resolveOrCreateProfile(userId) {
+        const cached = this.profilesByUserId.get(userId);
+        if (cached) return cached;
+        try {
+          const row = await prisma.kycProfile.findUnique({ where: { userId } });
+          if (row) {
+            const profile = this.profileFromPrismaRow(row);
+            this.profilesByUserId.set(userId, profile);
+            return profile;
+          }
+        } catch (err) {
+          console.error("[kyc] failed to resolve profile from database:", err);
+        }
+        return this.getOrCreateProfile(userId);
+      }
+      /**
        * Retrieves or initializes a KYC profile for a user.
        */
       getOrCreateProfile(userId) {
@@ -6582,12 +6604,8 @@ var init_kyc_service = __esm({
           if (user?.kycStatus === "APPROVED") {
             profile.status = "APPROVED";
             profile.verifiedCountryCode = user.countryCode;
-          } else if (user && (user.kycStatus === "SUBMITTED" || user.kycStatus === "UNDER_REVIEW" || user.kycStatus === "NEEDS_MORE_INFORMATION")) {
-            user.kycStatus = "NOT_STARTED";
-            user.updatedAt = /* @__PURE__ */ new Date();
-            defaultAuthService.syncCustomerActivationFromKyc(userId);
-            defaultAuthService.saveUserSoon(userId);
-            profile.status = "NOT_STARTED";
+          } else if (user && (user.kycStatus === "SUBMITTED" || user.kycStatus === "UNDER_REVIEW" || user.kycStatus === "NEEDS_MORE_INFORMATION" || user.kycStatus === "REJECTED")) {
+            profile.status = user.kycStatus;
           }
           this.profilesByUserId.set(userId, profile);
           this.persistProfileSoon(profile);
@@ -6598,8 +6616,11 @@ var init_kyc_service = __esm({
        * Submits or updates verification details. Customer-facing.
        */
       async submitVerification(params) {
-        await this.readyPromise;
-        const profile = this.getOrCreateProfile(params.userId);
+        try {
+          await this.readyPromise;
+        } catch {
+        }
+        const profile = await this.resolveOrCreateProfile(params.userId);
         if (profile.status === "UNDER_REVIEW") {
           throw new Error("Your verification is currently under review by our compliance team.");
         }
@@ -6701,7 +6722,10 @@ var init_kyc_service = __esm({
         if (params.decision === "NEEDS_MORE_INFORMATION" && !params.notes) {
           throw new Error("Documented notes explaining what additional information is required are mandatory.");
         }
-        const profile = this.profilesByUserId.get(params.targetUserId);
+        let profile = this.profilesByUserId.get(params.targetUserId);
+        if (!profile) {
+          profile = await this.resolveOrCreateProfile(params.targetUserId);
+        }
         if (!profile) {
           throw new Error(`KYC profile not found for user: ${params.targetUserId}`);
         }
@@ -7001,8 +7025,12 @@ var init_auth_service = __esm({
         return this.readyPromise;
       }
       async bootstrap() {
-        await this.hydrateFromDatabase();
-        await this.seedPrimaryAdminAccount();
+        try {
+          await this.hydrateFromDatabase();
+          await this.seedPrimaryAdminAccount();
+        } catch (err) {
+          console.error("[auth] bootstrap failed to hydrate from database; running in fallback mode:", err);
+        }
       }
       userFromPrisma(row) {
         let mfaRecoveryCodes;
@@ -7414,39 +7442,52 @@ var init_auth_service = __esm({
       async resolveSessionByTokenHash(tokenHash) {
         const cached = this.sessionsByTokenHash.get(tokenHash);
         if (cached) return cached;
-        const row = await prisma.session.findUnique({ where: { tokenHash } });
-        if (!row) return null;
-        const session = {
-          id: row.id,
-          userId: row.userId,
-          tokenHash: row.tokenHash,
-          ipAddress: row.ipAddress ?? void 0,
-          userAgent: row.userAgent ?? void 0,
-          isRevoked: row.isRevoked,
-          transactionPinUnlocked: row.transactionPinUnlocked,
-          expiresAt: row.expiresAt,
-          createdAt: row.createdAt,
-          updatedAt: row.updatedAt
-        };
-        this.sessionsByTokenHash.set(tokenHash, session);
-        return session;
+        try {
+          const row = await prisma.session.findUnique({ where: { tokenHash } });
+          if (!row) return null;
+          const session = {
+            id: row.id,
+            userId: row.userId,
+            tokenHash: row.tokenHash,
+            ipAddress: row.ipAddress ?? void 0,
+            userAgent: row.userAgent ?? void 0,
+            isRevoked: row.isRevoked,
+            transactionPinUnlocked: row.transactionPinUnlocked,
+            expiresAt: row.expiresAt,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt
+          };
+          this.sessionsByTokenHash.set(tokenHash, session);
+          return session;
+        } catch (err) {
+          console.error("[auth] failed to resolve session by token hash:", err);
+          return null;
+        }
       }
       /** Resolve a user from cache, falling back to Postgres when needed. */
       async resolveUserById(userId) {
         const cached = this.usersById.get(userId);
         if (cached) return cached;
-        const row = await prisma.user.findUnique({ where: { id: userId } });
-        if (!row) return null;
-        const user = this.userFromPrisma(row);
-        this.cachePutUser(user);
-        return user;
+        try {
+          const row = await prisma.user.findUnique({ where: { id: userId } });
+          if (!row) return null;
+          const user = this.userFromPrisma(row);
+          this.cachePutUser(user);
+          return user;
+        } catch (err) {
+          console.error("[auth] failed to resolve user by ID from database:", err);
+          return null;
+        }
       }
       /**
        * Validates a session token and returns the authenticated user.
        */
       async validateSession(sessionToken) {
         if (!sessionToken) return null;
-        await this.readyPromise;
+        try {
+          await this.readyPromise;
+        } catch {
+        }
         const tokenHash = SecurityService.hashToken(sessionToken);
         const session = await this.resolveSessionByTokenHash(tokenHash);
         if (!session) return null;
@@ -7459,6 +7500,15 @@ var init_auth_service = __esm({
             data: { isRevoked: true, updatedAt: session.updatedAt }
           }).catch((err) => console.error("[auth] failed to revoke expired session:", err));
           return null;
+        }
+        const now = Date.now();
+        if (session.expiresAt.getTime() - now < 12 * 60 * 60 * 1e3) {
+          session.expiresAt = new Date(now + this.SESSION_TTL_MS);
+          session.updatedAt = /* @__PURE__ */ new Date();
+          void prisma.session.updateMany({
+            where: { tokenHash },
+            data: { expiresAt: session.expiresAt, updatedAt: session.updatedAt }
+          }).catch((err) => console.error("[auth] failed to extend active session:", err));
         }
         const user = await this.resolveUserById(session.userId);
         if (!user) {
@@ -8229,7 +8279,7 @@ function centralErrorHandler(err, req, res, _next) {
     return;
   }
   const errorMessage = err instanceof Error ? err.message : "An unexpected error occurred.";
-  if (errorMessage.includes("Invalid email or password") || errorMessage.includes("Authentication Failed") || errorMessage.includes("Invalid credentials") || errorMessage.includes("Invalid MFA") || errorMessage.includes("recovery code") || errorMessage.includes("Unauthorized") || errorMessage.includes("unauthorized")) {
+  if (errorMessage.includes("Invalid email or password") || errorMessage.includes("Authentication Failed") || errorMessage.includes("Invalid credentials") || errorMessage.includes("Invalid MFA") || errorMessage.includes("recovery code") || errorMessage.includes("Unauthorized") || errorMessage.includes("unauthorized") || errorMessage.includes("session is invalid") || errorMessage.includes("Invalid or expired session")) {
     const response2 = {
       type: "https://avenora.com/errors/unauthorized",
       title: "Authentication Failed",
@@ -8242,7 +8292,7 @@ function centralErrorHandler(err, req, res, _next) {
     res.status(401).json(response2);
     return;
   }
-  if (errorMessage.includes("temporarily locked")) {
+  if (errorMessage.includes("temporarily locked") || errorMessage.includes("account is locked")) {
     const response2 = {
       type: "https://avenora.com/errors/account-locked",
       title: "Account Locked",
@@ -8268,7 +8318,7 @@ function centralErrorHandler(err, req, res, _next) {
     res.status(403).json(response2);
     return;
   }
-  if (errorMessage.includes("already exists") || errorMessage.includes("duplicate")) {
+  if (errorMessage.includes("already exists") || errorMessage.includes("duplicate") || errorMessage.includes("Conflict:") || errorMessage.includes("already approved") || errorMessage.includes("already been executed") || errorMessage.includes("already been disbursed") || errorMessage.includes("Idempotency key collision")) {
     const response2 = {
       type: "https://avenora.com/errors/conflict",
       title: "Resource Conflict",
@@ -8281,7 +8331,7 @@ function centralErrorHandler(err, req, res, _next) {
     res.status(409).json(response2);
     return;
   }
-  if (errorMessage.includes("not found") || errorMessage.includes("User not found")) {
+  if (errorMessage.includes("not found") || errorMessage.includes("User not found") || errorMessage.includes("Customer not found") || errorMessage.includes("Card not found") || errorMessage.includes("Loan application not found") || errorMessage.includes("Grant application not found") || errorMessage.includes("KYC profile not found")) {
     const response2 = {
       type: "https://avenora.com/errors/not-found",
       title: "Resource Not Found",
@@ -8294,7 +8344,8 @@ function centralErrorHandler(err, req, res, _next) {
     res.status(404).json(response2);
     return;
   }
-  if (errorMessage.includes("Password must be") || errorMessage.includes("Invalid or expired") || errorMessage.includes("Current password is incorrect") || errorMessage.includes("Invalid verification code") || errorMessage.includes("Cannot delete") || errorMessage.includes("documented reason") || errorMessage.includes("not awaiting issuance")) {
+  const isClientError = errorMessage.includes("Password must be") || errorMessage.includes("Invalid or expired") || errorMessage.includes("Current password is incorrect") || errorMessage.includes("Invalid verification code") || errorMessage.includes("Cannot delete") || errorMessage.includes("documented reason") || errorMessage.includes("not awaiting issuance") || errorMessage.includes("must be") || errorMessage.includes("required") || errorMessage.includes("Invalid") || errorMessage.includes("invalid") || errorMessage.includes("Cannot") || errorMessage.includes("cannot") || errorMessage.includes("strictly greater") || errorMessage.includes("strictly positive") || errorMessage.includes("between") || errorMessage.includes("does not match") || errorMessage.includes("not valid") || errorMessage.includes("not available") || errorMessage.includes("expired") || errorMessage.includes("under review") || errorMessage.includes("exceed") || errorMessage.includes("digits") || errorMessage.includes("letter") || errorMessage.includes("Tax ID") || errorMessage.includes("SSN") || errorMessage.includes("CPF") || errorMessage.includes("DNI") || errorMessage.includes("NIE") || errorMessage.includes("insufficient") || errorMessage.includes("Insufficient") || errorMessage.includes("frozen") || errorMessage.includes("Card Declination") || errorMessage.includes("Safety guard") || errorMessage.includes("Enter a valid phone");
+  if (isClientError) {
     const response2 = {
       type: "https://avenora.com/errors/bad-request",
       title: "Bad Request",
@@ -9861,11 +9912,19 @@ var ReviewDecisionSchema = import_zod6.z.object({
   reasonCode: import_zod6.z.string().optional(),
   expectedVersion: import_zod6.z.number().int().optional()
 });
-kycRouter.get("/me", authenticate, (req, res) => {
-  const profile = defaultKycService.getOrCreateProfile(req.user.id);
-  res.json({
-    profile: defaultKycService.sanitizeForCustomer(profile)
-  });
+kycRouter.get("/me", authenticate, async (req, res, next) => {
+  try {
+    try {
+      await defaultKycService.whenReady();
+    } catch {
+    }
+    const profile = await defaultKycService.resolveOrCreateProfile(req.user.id);
+    res.json({
+      profile: defaultKycService.sanitizeForCustomer(profile)
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 kycRouter.post("/submit", authenticate, async (req, res, next) => {
   try {
