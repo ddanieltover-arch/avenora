@@ -448,7 +448,16 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
                                 </span>
                               </AdminTd>
                               <AdminTd>
-                                <span className="font-mono text-[11px] text-slate-700">{tx.userId || 'System'}</span>
+                                {tx.userId ? (
+                                  <>
+                                    <span className="block font-semibold text-brand-deep">
+                                      {tx.customerName || 'Unknown customer'}
+                                    </span>
+                                    <span className="font-mono text-[10px] text-slate-500">{tx.userId}</span>
+                                  </>
+                                ) : (
+                                  <span className="font-mono text-[11px] text-slate-700">System</span>
+                                )}
                               </AdminTd>
                               <AdminTd>
                                 <span className="font-bold text-slate-900 block">{tx.formattedAmount}</span>

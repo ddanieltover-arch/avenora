@@ -16839,6 +16839,14 @@ function jsonSafe(value) {
     JSON.stringify(value, (_key, v) => typeof v === "bigint" ? v.toString() : v)
   );
 }
+function enrichTransactionForAdmin(tx) {
+  const customer = tx.userId ? defaultAuthService.getUserById(tx.userId) : void 0;
+  return {
+    ...tx,
+    customerEmail: customer?.email,
+    customerName: customer?.fullName
+  };
+}
 adminRouter.get(
   "/funding-board",
   authenticate,
@@ -16872,7 +16880,7 @@ adminRouter.get(
         jsonSafe({
           deposits,
           withdrawals,
-          transactions: txResult.transactions,
+          transactions: txResult.transactions.map(enrichTransactionForAdmin),
           total: txResult.total,
           limit: txResult.limit,
           offset: txResult.offset
@@ -17047,7 +17055,10 @@ adminRouter.get(
         limit: limit ? parseInt(String(limit), 10) : 50,
         offset: offset ? parseInt(String(offset), 10) : 0
       });
-      res.json(result);
+      res.json({
+        ...result,
+        transactions: result.transactions.map(enrichTransactionForAdmin)
+      });
     } catch (err) {
       next(err);
     }

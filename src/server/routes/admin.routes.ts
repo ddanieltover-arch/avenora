@@ -697,6 +697,17 @@ function jsonSafe<T>(value: T): T {
   ) as T;
 }
 
+function enrichTransactionForAdmin(
+  tx: ReturnType<typeof defaultWalletService.getAllTransactionsForAdmin>['transactions'][number],
+) {
+  const customer = tx.userId ? defaultAuthService.getUserById(tx.userId) : undefined;
+  return {
+    ...tx,
+    customerEmail: customer?.email,
+    customerName: customer?.fullName,
+  };
+}
+
 /**
  * GET /api/v1/admin/funding-board
  * Single cold-start-safe payload: pending deposits, withdrawals, and transaction history.
@@ -741,7 +752,7 @@ adminRouter.get(
         jsonSafe({
           deposits,
           withdrawals,
-          transactions: txResult.transactions,
+          transactions: txResult.transactions.map(enrichTransactionForAdmin),
           total: txResult.total,
           limit: txResult.limit,
           offset: txResult.offset,
@@ -945,7 +956,10 @@ adminRouter.get(
         offset: offset ? parseInt(String(offset), 10) : 0,
       });
 
-      res.json(result);
+      res.json({
+        ...result,
+        transactions: result.transactions.map(enrichTransactionForAdmin),
+      });
     } catch (err) {
       next(err);
     }
