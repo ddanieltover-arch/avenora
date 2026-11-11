@@ -1150,6 +1150,8 @@ export class AuthService {
     roleFilter?: string;
     statusFilter?: string;
     kycFilter?: string;
+    sortBy?: string;
+    sortDir?: string;
     limit?: number;
     offset?: number;
   }): Promise<{
@@ -1185,6 +1187,51 @@ export class AuthService {
           u.countryCode.toLowerCase().includes(q)
       );
     }
+
+    const allowedSortBy = new Set([
+      'createdAt',
+      'fullName',
+      'email',
+      'role',
+      'status',
+      'kycStatus',
+      'countryCode',
+    ]);
+    const sortBy = params.sortBy && allowedSortBy.has(params.sortBy) ? params.sortBy : 'createdAt';
+    const sortDir = params.sortDir === 'asc' ? 'asc' : 'desc';
+    const dir = sortDir === 'asc' ? 1 : -1;
+
+    const textSortValue = (u: UserRecord): string => {
+      switch (sortBy) {
+        case 'fullName':
+          return u.fullName;
+        case 'email':
+          return u.email;
+        case 'role':
+          return u.role;
+        case 'status':
+          return u.status;
+        case 'kycStatus':
+          return u.kycStatus;
+        case 'countryCode':
+          return u.countryCode;
+        default:
+          return '';
+      }
+    };
+
+    list = [...list].sort((a, b) => {
+      if (sortBy === 'createdAt') {
+        const aTime = a.createdAt instanceof Date ? a.createdAt.getTime() : new Date(a.createdAt).getTime();
+        const bTime = b.createdAt instanceof Date ? b.createdAt.getTime() : new Date(b.createdAt).getTime();
+        return (aTime - bTime) * dir;
+      }
+      const aVal = textSortValue(a).toLowerCase();
+      const bVal = textSortValue(b).toLowerCase();
+      if (aVal < bVal) return -1 * dir;
+      if (aVal > bVal) return 1 * dir;
+      return 0;
+    });
 
     const total = list.length;
     const limit = Math.min(Math.max(params.limit || 50, 1), 100);

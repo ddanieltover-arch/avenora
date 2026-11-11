@@ -13,6 +13,8 @@ import {
   Trash2,
   CreditCard,
   Sliders,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
 import {
   AdminPageHeader,
@@ -40,6 +42,9 @@ export interface AdminCustomersSectionProps {
   setCustomerSearch: (v: string) => void;
   customerStatusFilter: string;
   setCustomerStatusFilter: (v: string) => void;
+  customerSortBy: string;
+  customerSortDir: 'asc' | 'desc';
+  onCustomerSort: (column: string) => void;
   fetchCustomers: () => void;
   inspectCustomer: (id: string) => void;
   selectedCustomer: any;
@@ -96,6 +101,9 @@ export const AdminCustomersSection: React.FC<AdminCustomersSectionProps> = ({
   setCustomerSearch,
   customerStatusFilter,
   setCustomerStatusFilter,
+  customerSortBy,
+  customerSortDir,
+  onCustomerSort,
   fetchCustomers,
   inspectCustomer,
   selectedCustomer,
@@ -213,11 +221,42 @@ export const AdminCustomersSection: React.FC<AdminCustomersSectionProps> = ({
                 <AdminTable>
                       <AdminTableHead>
                         <AdminTr>
-                          <AdminTh>Customer</AdminTh>
-                          <AdminTh>Role</AdminTh>
-                          <AdminTh>Account Status</AdminTh>
-                          <AdminTh>KYC Tier / Status</AdminTh>
-                          <AdminTh>Registered Date</AdminTh>
+                          {(
+                            [
+                              { key: 'fullName', label: 'Customer' },
+                              { key: 'role', label: 'Role' },
+                              { key: 'status', label: 'Account Status' },
+                              { key: 'kycStatus', label: 'KYC Tier / Status' },
+                              { key: 'createdAt', label: 'Registered Date' },
+                            ] as const
+                          ).map((col) => {
+                            const active = customerSortBy === col.key;
+                            return (
+                              <AdminTh key={col.key}>
+                                <button
+                                  type="button"
+                                  onClick={() => onCustomerSort(col.key)}
+                                  className="inline-flex items-center gap-1 font-inherit text-inherit uppercase tracking-inherit hover:text-brand-deep cursor-pointer"
+                                  aria-sort={
+                                    active
+                                      ? customerSortDir === 'asc'
+                                        ? 'ascending'
+                                        : 'descending'
+                                      : 'none'
+                                  }
+                                >
+                                  <span>{col.label}</span>
+                                  {active ? (
+                                    customerSortDir === 'asc' ? (
+                                      <ChevronUp className="w-3.5 h-3.5" aria-hidden />
+                                    ) : (
+                                      <ChevronDown className="w-3.5 h-3.5" aria-hidden />
+                                    )
+                                  ) : null}
+                                </button>
+                              </AdminTh>
+                            );
+                          })}
                           <AdminTh className="text-right">Administrative Actions</AdminTh>
                         </AdminTr>
                       </AdminTableHead>

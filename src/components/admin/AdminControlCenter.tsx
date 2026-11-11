@@ -78,6 +78,8 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
   const [customers, setCustomers] = useState<any[]>([]);
   const [customerSearch, setCustomerSearch] = useState('');
   const [customerStatusFilter, setCustomerStatusFilter] = useState('ALL');
+  const [customerSortBy, setCustomerSortBy] = useState('createdAt');
+  const [customerSortDir, setCustomerSortDir] = useState<'asc' | 'desc'>('desc');
   const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
   const [statusModalCustomer, setStatusModalCustomer] = useState<any | null>(null);
   const [newStatusValue, setNewStatusValue] = useState<
@@ -172,13 +174,19 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
     }
   };
 
-  const fetchCustomers = async () => {
+  const fetchCustomers = async (
+    sortOverride?: { sortBy?: string; sortDir?: 'asc' | 'desc' },
+  ) => {
     if (!token) return;
     try {
       setLoading(true);
+      const sortBy = sortOverride?.sortBy ?? customerSortBy;
+      const sortDir = sortOverride?.sortDir ?? customerSortDir;
       const params = new URLSearchParams();
       if (customerSearch) params.set('search', customerSearch);
       if (customerStatusFilter !== 'ALL') params.set('status', customerStatusFilter);
+      params.set('sortBy', sortBy);
+      params.set('sortDir', sortDir);
 
       const res = await fetch(`/api/v1/admin/customers?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -190,6 +198,20 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleCustomerSort = (column: string) => {
+    const nextDir: 'asc' | 'desc' =
+      customerSortBy === column
+        ? customerSortDir === 'asc'
+          ? 'desc'
+          : 'asc'
+        : column === 'createdAt'
+          ? 'desc'
+          : 'asc';
+    setCustomerSortBy(column);
+    setCustomerSortDir(nextDir);
+    void fetchCustomers({ sortBy: column, sortDir: nextDir });
   };
 
   const inspectCustomer = async (id: string) => {
@@ -1143,6 +1165,9 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
                     setCustomerSearch={setCustomerSearch}
                     customerStatusFilter={customerStatusFilter}
                     setCustomerStatusFilter={setCustomerStatusFilter}
+                    customerSortBy={customerSortBy}
+                    customerSortDir={customerSortDir}
+                    onCustomerSort={handleCustomerSort}
                     fetchCustomers={fetchCustomers}
                     inspectCustomer={inspectCustomer}
                     selectedCustomer={selectedCustomer}

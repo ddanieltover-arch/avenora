@@ -279,7 +279,7 @@ adminRouter.get(
   requireRoles(['SUPPORT', 'COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN']),
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { search, status, kycStatus, limit, offset } = req.query;
+      const { search, status, kycStatus, sortBy, sortDir, limit, offset } = req.query;
       // Customer Management is CUSTOMER-only; ignore any client role query.
       const result = await defaultAuthService.getAllUsersForAdmin({
         actorRole: req.user!.role,
@@ -287,6 +287,8 @@ adminRouter.get(
         roleFilter: 'CUSTOMER',
         statusFilter: status ? String(status) : undefined,
         kycFilter: kycStatus ? String(kycStatus) : undefined,
+        sortBy: sortBy ? String(sortBy) : undefined,
+        sortDir: sortDir ? String(sortDir) : undefined,
         limit: limit ? parseInt(String(limit), 10) : 50,
         offset: offset ? parseInt(String(offset), 10) : 0,
       });
