@@ -248,7 +248,7 @@ export class AuthService {
 
   /** Single operational admin for local / prototype control-center access. */
   private async seedPrimaryAdminAccount(): Promise<void> {
-    const email = 'support@avenorabank.com';
+    const email = 'support@avenorabank.org';
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
       this.cachePutUser(this.userFromPrisma(existing));
@@ -536,7 +536,7 @@ export class AuthService {
         const isDemoBypass =
           config.PROTOTYPE_MODE &&
           params.totpCode === '123456' &&
-          (user.email.endsWith('@avenora.internal') || user.email === 'support@avenorabank.com');
+          (user.email.endsWith('@avenora.internal') || user.email === 'support@avenorabank.org');
         const isTotpValid = isDemoBypass || SecurityService.verifyTotpCode(user.mfaSecret, params.totpCode);
         if (!isTotpValid) {
           throw new Error('Invalid MFA verification code.');

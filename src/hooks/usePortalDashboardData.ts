@@ -130,11 +130,11 @@ export function usePortalDashboardData({
       }
 
       if (!wRes.ok) {
-        setError('Unable to load account data. Please try again or contact support@avenorabank.com.');
+        setError('Unable to load account data. Please try again or contact support@avenorabank.org.');
       }
     } catch {
       if (fetchGenerationRef.current === generation) {
-        setError('Unable to load account data. Please try again or contact support@avenorabank.com.');
+        setError('Unable to load account data. Please try again or contact support@avenorabank.org.');
       }
     } finally {
       if (fetchGenerationRef.current === generation) {

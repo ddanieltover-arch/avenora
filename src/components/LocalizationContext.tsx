@@ -486,7 +486,7 @@ const DICTIONARY: Record<SupportedLocale, Translations> = {
       phoneValue: '+1 (800) 284-6672',
       phoneNote: 'Member services · 24/7 card and fraud line',
       emailTitle: 'Email',
-      emailValue: 'support@avenorabank.com',
+      emailValue: 'support@avenorabank.org',
       emailNote: 'We typically respond within one business day',
       visitTitle: 'Correspondence',
       visitAddress: 'Avenora Member Services\n1200 Financial Plaza, Suite 400\nNew York, NY 10004\nUnited States',
@@ -882,7 +882,7 @@ const DICTIONARY: Record<SupportedLocale, Translations> = {
       phoneValue: '+1 (800) 284-6672',
       phoneNote: 'Atención al socio · Línea 24/7 de fraude y tarjetas',
       emailTitle: 'Correo',
-      emailValue: 'support@avenorabank.com',
+      emailValue: 'support@avenorabank.org',
       emailNote: 'Respondemos normalmente en un día hábil',
       visitTitle: 'Correspondencia',
       visitAddress:
@@ -1279,7 +1279,7 @@ const DICTIONARY: Record<SupportedLocale, Translations> = {
       phoneValue: '+1 (800) 284-6672',
       phoneNote: 'Atendimento ao associado · Linha 24h fraude e cartões',
       emailTitle: 'E-mail',
-      emailValue: 'support@avenorabank.com',
+      emailValue: 'support@avenorabank.org',
       emailNote: 'Resposta em até um dia útil, em geral',
       visitTitle: 'Correspondência',
       visitAddress:

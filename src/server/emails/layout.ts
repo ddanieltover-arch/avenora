@@ -35,7 +35,7 @@ function isLocalhostUrl(url: string): boolean {
 /**
  * Public site origin for email links and absolute assets.
  * Never emit localhost when running on Vercel / production — prefer APP_URL,
- * then VERCEL_PROJECT_PRODUCTION_URL, then the canonical avenorabank.com domain.
+ * then VERCEL_PROJECT_PRODUCTION_URL, then the canonical avenorabank.org domain.
  */
 export function getAppBaseUrl(): string {
   const configured = getValidatedConfig().APP_URL.replace(/\/$/, '');
@@ -54,7 +54,7 @@ export function getAppBaseUrl(): string {
   const onVercel = process.env.VERCEL === '1';
   const isProduction = process.env.NODE_ENV === 'production';
   if (onVercel || isProduction) {
-    return 'https://avenorabank.com';
+    return 'https://avenorabank.org';
   }
 
   return configured;
@@ -70,7 +70,7 @@ export function getEmailLogoUrl(): string {
 }
 
 export function getSupportEmail(): string {
-  return getValidatedConfig().SUPPORT_EMAIL || 'support@avenorabank.com';
+  return getValidatedConfig().SUPPORT_EMAIL || 'support@avenorabank.org';
 }
 
 export function renderCtaButton(cta: EmailCta): string {

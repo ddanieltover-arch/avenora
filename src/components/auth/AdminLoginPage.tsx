@@ -228,7 +228,7 @@ export const AdminLoginPage: React.FC = () => {
                     autoComplete="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="admin@avenora.com"
+                    placeholder="support@avenorabank.org"
                     className="w-full pl-9 pr-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#076c64]/30 focus:border-[#076c64]"
                   />
                 </div>
@@ -309,7 +309,7 @@ export const AdminLoginPage: React.FC = () => {
                     autoComplete="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="admin@avenora.com"
+                    placeholder="support@avenorabank.org"
                     className="w-full pl-9 pr-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#076c64]"
                   />
                 </div>

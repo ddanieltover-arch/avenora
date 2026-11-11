@@ -267,7 +267,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
             <span>{error}</span>
           </div>
           <a
-            href="mailto:support@avenorabank.com?subject=Account%20suspension%20support"
+            href="mailto:support@avenorabank.org?subject=Account%20suspension%20support"
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-rose-200 text-xs font-semibold hover:bg-rose-100 shrink-0"
           >
             <Mail className="w-3.5 h-3.5" aria-hidden />

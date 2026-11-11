@@ -6,7 +6,7 @@
 import React from 'react';
 import { Mail, Snowflake } from 'lucide-react';
 
-const SUPPORT_EMAIL = 'support@avenorabank.com';
+const SUPPORT_EMAIL = 'support@avenorabank.org';
 
 export const AccountSuspendedBanner: React.FC = () => {
   return (

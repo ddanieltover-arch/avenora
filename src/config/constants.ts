@@ -15,7 +15,7 @@ export const PLATFORM_METADATA = {
 export const PLATFORM_BTC_DEPOSIT_ADDRESS =
   'bc1qavenora0platformcustodydepositaddress000000000000000';
 
-export const PLATFORM_DEPOSIT_SUPPORT_EMAIL = 'support@avenorabank.com';
+export const PLATFORM_DEPOSIT_SUPPORT_EMAIL = 'support@avenorabank.org';
 
 export const SUPPORTED_COUNTRIES = [
   { code: 'US', name: 'United States', defaultCurrency: 'USD', status: 'SANDBOX_PROTOTYPE' },

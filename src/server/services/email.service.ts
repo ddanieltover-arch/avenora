@@ -70,7 +70,7 @@ export class EmailService {
     const config = this.getConfig();
     if (config.EMAIL_FROM?.trim()) return config.EMAIL_FROM.trim();
     const name = config.EMAIL_FROM_NAME?.trim() || 'Avenora Bank';
-    const address = config.EMAIL_FROM_ADDRESS?.trim() || 'noreply@avenorabank.com';
+    const address = config.EMAIL_FROM_ADDRESS?.trim() || 'noreply@avenorabank.org';
     return `${name} <${address}>`;
   }
 

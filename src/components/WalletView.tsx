@@ -702,7 +702,7 @@ export const WalletView: React.FC<WalletViewProps> = ({
           <p className={`text-xs mt-1 ${frozenForKyc ? 'text-[#3d5c56]' : 'text-amber-900/90'}`}>
             {frozenForKyc
               ? 'Deposits and withdrawals are blocked until an administrator approves your identity verification.'
-              : 'Your account status blocks deposits and withdrawals. Contact support@avenorabank.com.'}
+              : 'Your account status blocks deposits and withdrawals. Contact support@avenorabank.org.'}
           </p>
         </div>
       )}

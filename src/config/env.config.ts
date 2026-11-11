@@ -64,13 +64,13 @@ const EnvSchema = z.object({
 
   // Transactional email (Resend) — optional; sends are skipped when unset
   RESEND_API_KEY: z.string().optional().default(''),
-  EMAIL_FROM: z.string().optional().default('Avenora Bank <noreply@avenorabank.com>'),
-  EMAIL_FROM_ADDRESS: z.string().email().optional().default('noreply@avenorabank.com'),
+  EMAIL_FROM: z.string().optional().default('Avenora Bank <noreply@avenorabank.org>'),
+  EMAIL_FROM_ADDRESS: z.string().email().optional().default('noreply@avenorabank.org'),
   EMAIL_FROM_NAME: z.string().optional().default('Avenora Bank'),
-  EMAIL_REPLY_TO: z.string().email().optional().default('support@avenorabank.com'),
-  SUPPORT_EMAIL: z.string().email().optional().default('support@avenorabank.com'),
-  ADMIN_EMAIL: z.string().email().optional().default('support@avenorabank.com'),
-  CONTACT_EMAIL: z.string().email().optional().default('support@avenorabank.com'),
+  EMAIL_REPLY_TO: z.string().email().optional().default('support@avenorabank.org'),
+  SUPPORT_EMAIL: z.string().email().optional().default('support@avenorabank.org'),
+  ADMIN_EMAIL: z.string().email().optional().default('support@avenorabank.org'),
+  CONTACT_EMAIL: z.string().email().optional().default('support@avenorabank.org'),
 });
 
 export type ValidatedEnv = z.infer<typeof EnvSchema>;
@@ -93,7 +93,7 @@ export function getValidatedConfig(customEnv?: Record<string, string | undefined
     if (vercelHost && !/localhost|127\.0\.0\.1/i.test(vercelHost)) {
       rawEnv.APP_URL = `https://${vercelHost.replace(/^https?:\/\//i, '').replace(/\/$/, '')}`;
     } else if (rawEnv.VERCEL === '1' || rawEnv.NODE_ENV === 'production') {
-      rawEnv.APP_URL = 'https://avenorabank.com';
+      rawEnv.APP_URL = 'https://avenorabank.org';
     }
   }
 

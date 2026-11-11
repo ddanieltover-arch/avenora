@@ -137,7 +137,7 @@ var init_constants = __esm({
       LIVE_MONEY_ENABLED: false
     };
     PLATFORM_BTC_DEPOSIT_ADDRESS = "bc1qavenora0platformcustodydepositaddress000000000000000";
-    PLATFORM_DEPOSIT_SUPPORT_EMAIL = "support@avenorabank.com";
+    PLATFORM_DEPOSIT_SUPPORT_EMAIL = "support@avenorabank.org";
     SYSTEM_CHART_OF_ACCOUNTS = {
       // Asset Accounts (1000s)
       SAFEGUARDING_CASH_USD: {
@@ -230,7 +230,7 @@ function getValidatedConfig(customEnv) {
     if (vercelHost && !/localhost|127\.0\.0\.1/i.test(vercelHost)) {
       rawEnv.APP_URL = `https://${vercelHost.replace(/^https?:\/\//i, "").replace(/\/$/, "")}`;
     } else if (rawEnv.VERCEL === "1" || rawEnv.NODE_ENV === "production") {
-      rawEnv.APP_URL = "https://avenorabank.com";
+      rawEnv.APP_URL = "https://avenorabank.org";
     }
   }
   const parsed = EnvSchema.safeParse(rawEnv);
@@ -299,13 +299,13 @@ var init_env_config = __esm({
       CORS_ALLOWED_ORIGINS: import_zod2.z.string().default("http://localhost:3000"),
       // Transactional email (Resend) — optional; sends are skipped when unset
       RESEND_API_KEY: import_zod2.z.string().optional().default(""),
-      EMAIL_FROM: import_zod2.z.string().optional().default("Avenora Bank <noreply@avenorabank.com>"),
-      EMAIL_FROM_ADDRESS: import_zod2.z.string().email().optional().default("noreply@avenorabank.com"),
+      EMAIL_FROM: import_zod2.z.string().optional().default("Avenora Bank <noreply@avenorabank.org>"),
+      EMAIL_FROM_ADDRESS: import_zod2.z.string().email().optional().default("noreply@avenorabank.org"),
       EMAIL_FROM_NAME: import_zod2.z.string().optional().default("Avenora Bank"),
-      EMAIL_REPLY_TO: import_zod2.z.string().email().optional().default("support@avenorabank.com"),
-      SUPPORT_EMAIL: import_zod2.z.string().email().optional().default("support@avenorabank.com"),
-      ADMIN_EMAIL: import_zod2.z.string().email().optional().default("support@avenorabank.com"),
-      CONTACT_EMAIL: import_zod2.z.string().email().optional().default("support@avenorabank.com")
+      EMAIL_REPLY_TO: import_zod2.z.string().email().optional().default("support@avenorabank.org"),
+      SUPPORT_EMAIL: import_zod2.z.string().email().optional().default("support@avenorabank.org"),
+      ADMIN_EMAIL: import_zod2.z.string().email().optional().default("support@avenorabank.org"),
+      CONTACT_EMAIL: import_zod2.z.string().email().optional().default("support@avenorabank.org")
     });
     cachedEnv = null;
   }
@@ -2728,7 +2728,7 @@ function getAppBaseUrl() {
   const onVercel = process.env.VERCEL === "1";
   const isProduction = process.env.NODE_ENV === "production";
   if (onVercel || isProduction) {
-    return "https://avenorabank.com";
+    return "https://avenorabank.org";
   }
   return configured;
 }
@@ -2736,7 +2736,7 @@ function getEmailLogoUrl() {
   return "cid:avenora-header-logo";
 }
 function getSupportEmail() {
-  return getValidatedConfig().SUPPORT_EMAIL || "support@avenorabank.com";
+  return getValidatedConfig().SUPPORT_EMAIL || "support@avenorabank.org";
 }
 function renderCtaButton(cta) {
   return `<a href="${escapeHtml(cta.href)}" style="display:inline-block;padding:13px 24px;background:${EMAIL_BRAND.cta};color:${EMAIL_BRAND.white};text-decoration:none;border-radius:10px;font-weight:600;font-size:14px;font-family:system-ui,-apple-system,sans-serif;line-height:1.2;">${escapeHtml(cta.label)}</a>`;
@@ -2963,15 +2963,15 @@ function appUrl(path = "") {
 }
 function adminInbox() {
   const config = getValidatedConfig();
-  return config.ADMIN_EMAIL || config.SUPPORT_EMAIL || "support@avenorabank.com";
+  return config.ADMIN_EMAIL || config.SUPPORT_EMAIL || "support@avenorabank.org";
 }
 function contactInbox() {
   const config = getValidatedConfig();
-  return config.CONTACT_EMAIL || config.SUPPORT_EMAIL || config.ADMIN_EMAIL || "support@avenorabank.com";
+  return config.CONTACT_EMAIL || config.SUPPORT_EMAIL || config.ADMIN_EMAIL || "support@avenorabank.org";
 }
 function supportInbox() {
   const config = getValidatedConfig();
-  return config.SUPPORT_EMAIL || config.ADMIN_EMAIL || "support@avenorabank.com";
+  return config.SUPPORT_EMAIL || config.ADMIN_EMAIL || "support@avenorabank.org";
 }
 var init_compose = __esm({
   "src/server/emails/compose.ts"() {
@@ -4493,7 +4493,7 @@ var init_email_service = __esm({
         const config = this.getConfig();
         if (config.EMAIL_FROM?.trim()) return config.EMAIL_FROM.trim();
         const name = config.EMAIL_FROM_NAME?.trim() || "Avenora Bank";
-        const address = config.EMAIL_FROM_ADDRESS?.trim() || "noreply@avenorabank.com";
+        const address = config.EMAIL_FROM_ADDRESS?.trim() || "noreply@avenorabank.org";
         return `${name} <${address}>`;
       }
       async send(params) {
@@ -7161,7 +7161,7 @@ var init_auth_service = __esm({
       }
       /** Single operational admin for local / prototype control-center access. */
       async seedPrimaryAdminAccount() {
-        const email = "support@avenorabank.com";
+        const email = "support@avenorabank.org";
         const existing = await prisma.user.findUnique({ where: { email } });
         if (existing) {
           this.cachePutUser(this.userFromPrisma(existing));
@@ -7389,7 +7389,7 @@ var init_auth_service = __esm({
           }
           if (params.totpCode) {
             const config = getValidatedConfig();
-            const isDemoBypass = config.PROTOTYPE_MODE && params.totpCode === "123456" && (user.email.endsWith("@avenora.internal") || user.email === "support@avenorabank.com");
+            const isDemoBypass = config.PROTOTYPE_MODE && params.totpCode === "123456" && (user.email.endsWith("@avenora.internal") || user.email === "support@avenorabank.org");
             const isTotpValid = isDemoBypass || SecurityService.verifyTotpCode(user.mfaSecret, params.totpCode);
             if (!isTotpValid) {
               throw new Error("Invalid MFA verification code.");
@@ -13043,7 +13043,7 @@ init_auth_service();
 
 // src/server/middleware/accountAccess.ts
 init_prototypeAccess();
-var SUPPORT_EMAIL = "support@avenorabank.com";
+var SUPPORT_EMAIL = "support@avenorabank.org";
 function requireTransactionEligible(req, res, next) {
   const status = req.user?.status;
   const role = req.user?.role;
@@ -13054,7 +13054,7 @@ function requireTransactionEligible(req, res, next) {
       title: "Account Suspended",
       status: 403,
       code: "ACCOUNT_SUSPENDED",
-      detail: "Your account is under a temporary operational hold. All transactions are frozen. You may still sign in and browse your account. Contact customer service at support@avenorabank.com.",
+      detail: "Your account is under a temporary operational hold. All transactions are frozen. You may still sign in and browse your account. Contact customer service at support@avenorabank.org.",
       supportEmail: SUPPORT_EMAIL,
       instance: req.originalUrl,
       timestamp: (/* @__PURE__ */ new Date()).toISOString()
@@ -13067,7 +13067,7 @@ function requireTransactionEligible(req, res, next) {
       title: "Account Locked",
       status: 403,
       code: "ACCOUNT_LOCKED",
-      detail: "Your account has been locked due to multiple suspensions. All activity is blocked. Contact customer service at support@avenorabank.com.",
+      detail: "Your account has been locked due to multiple suspensions. All activity is blocked. Contact customer service at support@avenorabank.org.",
       supportEmail: SUPPORT_EMAIL,
       instance: req.originalUrl,
       timestamp: (/* @__PURE__ */ new Date()).toISOString()

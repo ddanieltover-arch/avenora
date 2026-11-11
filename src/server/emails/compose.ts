@@ -122,15 +122,15 @@ export function appUrl(path = ''): string {
 
 export function adminInbox(): string {
   const config = getValidatedConfig();
-  return config.ADMIN_EMAIL || config.SUPPORT_EMAIL || 'support@avenorabank.com';
+  return config.ADMIN_EMAIL || config.SUPPORT_EMAIL || 'support@avenorabank.org';
 }
 
 export function contactInbox(): string {
   const config = getValidatedConfig();
-  return config.CONTACT_EMAIL || config.SUPPORT_EMAIL || config.ADMIN_EMAIL || 'support@avenorabank.com';
+  return config.CONTACT_EMAIL || config.SUPPORT_EMAIL || config.ADMIN_EMAIL || 'support@avenorabank.org';
 }
 
 export function supportInbox(): string {
   const config = getValidatedConfig();
-  return config.SUPPORT_EMAIL || config.ADMIN_EMAIL || 'support@avenorabank.com';
+  return config.SUPPORT_EMAIL || config.ADMIN_EMAIL || 'support@avenorabank.org';
 }

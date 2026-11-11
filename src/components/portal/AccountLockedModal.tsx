@@ -6,7 +6,7 @@
 import React, { useEffect } from 'react';
 import { Lock, Mail, LogOut, ShieldAlert } from 'lucide-react';
 
-const SUPPORT_EMAIL = 'support@avenorabank.com';
+const SUPPORT_EMAIL = 'support@avenorabank.org';
 
 interface AccountLockedModalProps {
   onLogout: () => void | Promise<void>;

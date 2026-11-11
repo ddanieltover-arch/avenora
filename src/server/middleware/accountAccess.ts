@@ -7,7 +7,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { isKycBypassEnabled } from '../../config/prototypeAccess.ts';
 
-const SUPPORT_EMAIL = 'support@avenorabank.com';
+const SUPPORT_EMAIL = 'support@avenorabank.org';
 
 /**
  * Blocks deposits, withdrawals, transfers, FX, cards, loans, grants, and similar
@@ -26,7 +26,7 @@ export function requireTransactionEligible(req: Request, res: Response, next: Ne
       status: 403,
       code: 'ACCOUNT_SUSPENDED',
       detail:
-        'Your account is under a temporary operational hold. All transactions are frozen. You may still sign in and browse your account. Contact customer service at support@avenorabank.com.',
+        'Your account is under a temporary operational hold. All transactions are frozen. You may still sign in and browse your account. Contact customer service at support@avenorabank.org.',
       supportEmail: SUPPORT_EMAIL,
       instance: req.originalUrl,
       timestamp: new Date().toISOString(),
@@ -41,7 +41,7 @@ export function requireTransactionEligible(req: Request, res: Response, next: Ne
       status: 403,
       code: 'ACCOUNT_LOCKED',
       detail:
-        'Your account has been locked due to multiple suspensions. All activity is blocked. Contact customer service at support@avenorabank.com.',
+        'Your account has been locked due to multiple suspensions. All activity is blocked. Contact customer service at support@avenorabank.org.',
       supportEmail: SUPPORT_EMAIL,
       instance: req.originalUrl,
       timestamp: new Date().toISOString(),
