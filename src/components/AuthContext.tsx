@@ -11,7 +11,12 @@ import React, {
   useCallback,
   ReactNode,
 } from 'react';
-import { buildAdminPath, buildPortalPath, navigateToPath } from '../routing/appRoutes.ts';
+import {
+  buildAdminPath,
+  buildPortalPath,
+  buildPublicPath,
+  navigateToPath,
+} from '../routing/appRoutes.ts';
 
 const STAFF_ROLES = new Set(['SUPPORT', 'COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN']);
 
@@ -134,18 +139,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (res.ok && data.user) {
           setUser(data.user);
           setTransactionPinUnlocked(data.transactionPinUnlocked === true);
-        } else {
+        } else if (res.status === 401) {
+          // Only wipe storage on an explicit invalid/expired session.
           persistSessionToken(null);
           setToken(null);
           setUser(null);
           setTransactionPinUnlocked(false);
+        } else {
+          // Keep token on 5xx / unexpected payload so a blip does not force logout.
+          console.error('Session restore returned non-OK status', res.status, data);
         }
       } catch (err) {
+        // Network / parse errors: keep token for retry; do not clear session.
         console.error('Failed to restore session', err);
-        persistSessionToken(null);
-        setToken(null);
-        setUser(null);
-        setTransactionPinUnlocked(false);
       } finally {
         setLoading(false);
       }
@@ -278,6 +284,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setToken(null);
         setUser(null);
         setTransactionPinUnlocked(false);
+        navigateToPath(buildPublicPath('login'), { replace: true });
+        window.dispatchEvent(new PopStateEvent('popstate'));
       }
     } catch (err) {
       console.error('Failed to refresh user profile', err);

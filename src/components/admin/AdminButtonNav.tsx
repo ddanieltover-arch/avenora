@@ -11,12 +11,17 @@ import { ADMIN_LIVE_TABS } from './AdminSidebar.tsx';
 interface AdminButtonNavProps {
   activeTab: AdminTabId;
   onTabChange: (tab: AdminTabId) => void;
+  userRole?: string;
 }
 
-export const AdminButtonNav: React.FC<AdminButtonNavProps> = ({ activeTab, onTabChange }) => {
+export const AdminButtonNav: React.FC<AdminButtonNavProps> = ({ activeTab, onTabChange, userRole }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
+  const visibleTabs = ADMIN_LIVE_TABS.filter((item) => {
+    if (!item.roles) return true;
+    return Boolean(userRole && item.roles.includes(userRole));
+  });
 
   const updateScrollHints = useCallback(() => {
     const el = scrollRef.current;
@@ -73,7 +78,7 @@ export const AdminButtonNav: React.FC<AdminButtonNavProps> = ({ activeTab, onTab
           role="tablist"
           style={{ scrollbarWidth: 'none' }}
         >
-          {ADMIN_LIVE_TABS.map((item) => {
+          {visibleTabs.map((item) => {
             const Icon = item.icon;
             const selected = activeTab === item.id;
             return (

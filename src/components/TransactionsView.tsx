@@ -60,7 +60,8 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
   const { walletCurrencyCodes, currencyFilterShortLabel } = useCustomerWalletScope();
 
   const [transactions, setTransactions] = useState<TransactionItem[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(Boolean(token));
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -75,6 +76,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
   const fetchTransactions = async (searchOverride?: string) => {
     if (!token) return;
     setLoading(true);
+    setLoadError(null);
     try {
       const params = new URLSearchParams();
       if (currencyFilter !== 'ALL') params.set('currency', currencyFilter);
@@ -98,10 +100,18 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
         const retryData = await retry.json();
         if (retry.ok && retryData.transactions) {
           setTransactions(retryData.transactions);
+        } else {
+          setTransactions([]);
+          setLoadError(retryData.detail || retryData.title || 'Unable to load transactions. Please try again.');
         }
+      } else {
+        setTransactions([]);
+        setLoadError(data.detail || data.title || 'Unable to load transactions. Please try again.');
       }
     } catch (err) {
       console.error('Failed to load transaction history', err);
+      setTransactions([]);
+      setLoadError('Unable to load transactions. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -299,6 +309,23 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
         </div>
       </div>
 
+      {loadError && (
+        <div
+          className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900"
+          role="alert"
+        >
+          <span>{loadError}</span>
+          <button
+            type="button"
+            onClick={() => void fetchTransactions()}
+            disabled={loading}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#075B46] text-white text-xs font-semibold hover:bg-[#063D32] disabled:opacity-50 cursor-pointer shrink-0"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Transactions Table / List */}
       <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
@@ -361,7 +388,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                     <td className="py-3.5 px-4">
                       <div className="flex items-center gap-1.5 text-[11px] font-mono text-emerald-700">
                         <CheckCircle2 className="w-3.5 h-3.5 text-[#159d79]" />
-                        <span>#{tx.journalEntryId.slice(0, 12)}</span>
+                        <span>#{tx.journalEntryId?.slice(0, 12) ?? '—'}</span>
                       </div>
                     </td>
 
@@ -393,7 +420,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                 );
               })}
 
-              {filteredTransactions.length === 0 && !loading && (
+              {filteredTransactions.length === 0 && !loading && !loadError && (
                 <tr>
                   <td colSpan={5} className="py-12 text-center text-xs text-[#5c6f6c]">
                     <div className="max-w-xs mx-auto space-y-2">
@@ -402,6 +429,23 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                       <p className="text-[11px] text-slate-500">
                         Make a deposit, transfer, or card purchase to see new activity here.
                       </p>
+                    </div>
+                  </td>
+                </tr>
+              )}
+              {filteredTransactions.length === 0 && !loading && loadError && (
+                <tr>
+                  <td colSpan={5} className="py-12 text-center text-xs text-[#5c6f6c]">
+                    <div className="max-w-xs mx-auto space-y-2">
+                      <FileText className="w-8 h-8 text-rose-300 mx-auto" />
+                      <p className="font-semibold text-slate-700">Could not load transactions.</p>
+                      <button
+                        type="button"
+                        onClick={() => void fetchTransactions()}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#075B46] text-white text-xs font-semibold cursor-pointer"
+                      >
+                        Retry
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -473,7 +517,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                 </div>
                 <div className="flex justify-between py-1.5 border-b border-slate-100">
                   <span className="text-[#5c6f6c]">Journal Entry ID:</span>
-                  <span className="font-mono text-[#076c64]">{selectedTx.journalEntryId}</span>
+                  <span className="font-mono text-[#076c64]">{selectedTx.journalEntryId ?? '—'}</span>
                 </div>
                 <div className="flex justify-between py-1.5 border-b border-slate-100">
                   <span className="text-[#5c6f6c]">Transaction ID:</span>

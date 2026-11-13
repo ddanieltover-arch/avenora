@@ -96,6 +96,7 @@ export function GrantManagementView() {
   const [applications, setApplications] = useState<GrantApplication[]>([]);
   const [selectedApp, setSelectedApp] = useState<GrantApplication | null>(null);
   const [loadingApps, setLoadingApps] = useState(false);
+  const [appsLoadError, setAppsLoadError] = useState<string | null>(null);
 
   // Apply Modal
   const [applyingProgram, setApplyingProgram] = useState<GrantProgram | null>(null);
@@ -133,6 +134,7 @@ export function GrantManagementView() {
   const fetchApplications = async () => {
     if (!token) return;
     setLoadingApps(true);
+    setAppsLoadError(null);
     try {
       const isStaff = user && ['COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN'].includes(user.role);
       const url = activeTab === 'officer' && isStaff ? '/api/v1/grants/applications?all=true' : '/api/v1/grants/applications';
@@ -146,9 +148,14 @@ export function GrantManagementView() {
         if (data.applications.length > 0 && !selectedApp) {
           setSelectedApp(data.applications[0]);
         }
+      } else {
+        setApplications([]);
+        setAppsLoadError(data.detail || data.title || 'Unable to load grant applications. Please try again.');
       }
     } catch (err) {
       console.error('Failed to load grant applications', err);
+      setApplications([]);
+      setAppsLoadError('Unable to load grant applications. Please try again.');
     } finally {
       setLoadingApps(false);
     }
@@ -553,9 +560,25 @@ export function GrantManagementView() {
               <span className="text-[11px] text-slate-400 font-mono">{applications.length} total</span>
             </div>
 
+            {appsLoadError && (
+              <div className="rounded-xl border border-rose-500/40 bg-rose-950/40 px-3 py-2 text-xs text-rose-200 flex items-center justify-between gap-2">
+                <span>{appsLoadError}</span>
+                <button
+                  type="button"
+                  onClick={() => void fetchApplications()}
+                  disabled={loadingApps}
+                  className="shrink-0 px-2 py-1 rounded-lg bg-rose-800/80 text-white font-semibold disabled:opacity-50 cursor-pointer"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+
             <div className="space-y-2 max-h-[500px] overflow-y-auto scrollbar-thin">
               {applications.length === 0 ? (
-                <div className="text-center py-10 text-slate-500 text-xs">No grant applications found.</div>
+                <div className="text-center py-10 text-slate-500 text-xs">
+                  {appsLoadError ? 'Could not load applications.' : 'No grant applications found.'}
+                </div>
               ) : (
                 applications.map((app) => (
                   <div

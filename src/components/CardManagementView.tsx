@@ -72,6 +72,7 @@ export function CardManagementView() {
   const [cards, setCards] = useState<PaymentCard[]>([]);
   const [selectedCard, setSelectedCard] = useState<PaymentCard | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Sensitive Details Toggle
   const [showFullPan, setShowFullPan] = useState(false);
@@ -108,6 +109,7 @@ export function CardManagementView() {
   const fetchCards = async () => {
     if (!token) return;
     setLoading(true);
+    setLoadError(null);
     try {
       const res = await fetch('/api/v1/cards', {
         headers: { Authorization: `Bearer ${token}` },
@@ -129,9 +131,14 @@ export function CardManagementView() {
           setEditDailyLimit((Number(current.dailySpendLimitMinor) / 100).toFixed(2));
           setEditSingleLimit((Number(current.singleTxLimitMinor) / 100).toFixed(2));
         }
+      } else {
+        setCards([]);
+        setLoadError(data.detail || data.title || 'Unable to load cards. Please try again.');
       }
     } catch (err) {
       console.error('Failed to load payment cards', err);
+      setCards([]);
+      setLoadError('Unable to load cards. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -279,6 +286,22 @@ export function CardManagementView() {
 
   return (
     <div className="space-y-6">
+      {loadError && (
+        <div
+          className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900 max-w-3xl"
+          role="alert"
+        >
+          <span>{loadError}</span>
+          <button
+            type="button"
+            onClick={() => void fetchCards()}
+            disabled={loading}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#075B46] text-white text-xs font-semibold hover:bg-[#063D32] disabled:opacity-50 cursor-pointer shrink-0"
+          >
+            Retry
+          </button>
+        </div>
+      )}
       <div className="space-y-6 max-w-3xl">
           {/* Card Selector / Top bar */}
           <div className="flex justify-between items-center portal-dark-panel p-4 text-xs">
@@ -473,7 +496,11 @@ export function CardManagementView() {
               )}
             </div>
           ) : (
-            <div className="text-center py-20 text-slate-500 text-xs">No cards yet. Request a new card to get started.</div>
+            <div className="text-center py-20 text-slate-500 text-xs">
+              {loadError
+                ? 'Could not load cards.'
+                : 'No cards yet. Request a new card to get started.'}
+            </div>
           )}
 
           {/* Spending limits — only for issued cards */}

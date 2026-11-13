@@ -112,7 +112,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
   transactions,
   loading,
   error,
-  onRetry: _onRetry,
+  onRetry,
   onTabChange,
   onOpenWalletModal,
 }) => {
@@ -266,13 +266,22 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
             <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" aria-hidden />
             <span>{error}</span>
           </div>
-          <a
-            href="mailto:support@avenorabank.org?subject=Account%20suspension%20support"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-rose-200 text-xs font-semibold hover:bg-rose-100 shrink-0"
-          >
-            <Mail className="w-3.5 h-3.5" aria-hidden />
-            Email support
-          </a>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={onRetry}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#075B46] text-white text-xs font-semibold hover:bg-[#063D32] cursor-pointer"
+            >
+              Retry
+            </button>
+            <a
+              href="mailto:support@avenorabank.org?subject=Account%20suspension%20support"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-rose-200 text-xs font-semibold hover:bg-rose-100"
+            >
+              <Mail className="w-3.5 h-3.5" aria-hidden />
+              Email support
+            </a>
+          </div>
         </div>
       )}
 

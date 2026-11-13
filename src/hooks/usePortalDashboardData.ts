@@ -71,80 +71,112 @@ export function usePortalDashboardData({
   const [grantsSummary, setGrantsSummary] = useState<PortalApplicationSummary[]>([]);
   const [transactions, setTransactions] = useState<PortalTransactionSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fetchGenerationRef = useRef(0);
+  const hasLoadedOnceRef = useRef(false);
 
   const currencyKey = useMemo(() => walletCurrencyCodes.join(','), [walletCurrencyCodes]);
 
-  const fetchAll = useCallback(async () => {
-    if (!token) {
-      setLoading(false);
-      return;
-    }
-
-    const generation = fetchGenerationRef.current + 1;
-    fetchGenerationRef.current = generation;
-    setLoading(true);
-    setError(null);
-
-    try {
-      const headers = { Authorization: `Bearer ${token}` };
-      const fetchOpts: RequestInit = { headers, credentials: 'include', cache: 'no-store' };
-      const [wRes, cRes, lRes, gRes, tRes] = await Promise.all([
-        fetch('/api/v1/wallets/me', fetchOpts),
-        fetch('/api/v1/cards', fetchOpts),
-        fetch('/api/v1/loans/applications', fetchOpts),
-        fetch('/api/v1/grants/applications', fetchOpts),
-        fetch('/api/v1/wallets/transactions', fetchOpts),
-      ]);
-
-      if (fetchGenerationRef.current !== generation) {
+  const fetchAll = useCallback(
+    async (opts?: { soft?: boolean }) => {
+      if (!token) {
+        setLoading(false);
+        setRefreshing(false);
         return;
       }
 
-      if (wRes.ok) {
-        const wData = await wRes.json();
-        setWalletsSummary(filterWalletAccounts(wData.wallet?.accounts || [], walletCurrencyCodes));
+      const soft = Boolean(opts?.soft && hasLoadedOnceRef.current);
+      const generation = fetchGenerationRef.current + 1;
+      fetchGenerationRef.current = generation;
+      if (soft) {
+        setRefreshing(true);
       } else {
-        setWalletsSummary([]);
+        setLoading(true);
       }
+      setError(null);
 
-      if (cRes.ok) {
-        const cData = await cRes.json();
-        setCardsSummary(cData.cards || []);
-      }
+      try {
+        const headers = { Authorization: `Bearer ${token}` };
+        const fetchOpts: RequestInit = { headers, credentials: 'include', cache: 'no-store' };
+        const [wRes, cRes, lRes, gRes, tRes] = await Promise.all([
+          fetch('/api/v1/wallets/me', fetchOpts),
+          fetch('/api/v1/cards', fetchOpts),
+          fetch('/api/v1/loans/applications', fetchOpts),
+          fetch('/api/v1/grants/applications', fetchOpts),
+          fetch('/api/v1/wallets/transactions', fetchOpts),
+        ]);
 
-      if (lRes.ok) {
-        const lData = await lRes.json();
-        setLoansSummary(lData.applications || []);
-      }
+        if (fetchGenerationRef.current !== generation) {
+          return;
+        }
 
-      if (gRes.ok) {
-        const gData = await gRes.json();
-        setGrantsSummary(gData.applications || []);
-      }
+        const failures: string[] = [];
 
-      if (tRes.ok) {
-        const tData = await tRes.json();
-        setTransactions(tData.transactions || []);
-      }
+        if (wRes.ok) {
+          const wData = await wRes.json();
+          setWalletsSummary(filterWalletAccounts(wData.wallet?.accounts || [], walletCurrencyCodes));
+        } else {
+          setWalletsSummary([]);
+          failures.push('wallet');
+        }
 
-      if (!wRes.ok) {
-        setError('Unable to load account data. Please try again or contact support@avenorabank.org.');
+        if (cRes.ok) {
+          const cData = await cRes.json();
+          setCardsSummary(cData.cards || []);
+        } else {
+          setCardsSummary([]);
+          failures.push('cards');
+        }
+
+        if (lRes.ok) {
+          const lData = await lRes.json();
+          setLoansSummary(lData.applications || []);
+        } else {
+          setLoansSummary([]);
+          failures.push('loans');
+        }
+
+        if (gRes.ok) {
+          const gData = await gRes.json();
+          setGrantsSummary(gData.applications || []);
+        } else {
+          setGrantsSummary([]);
+          failures.push('grants');
+        }
+
+        if (tRes.ok) {
+          const tData = await tRes.json();
+          setTransactions(tData.transactions || []);
+        } else {
+          setTransactions([]);
+          failures.push('transactions');
+        }
+
+        if (failures.length > 0) {
+          setError(
+            failures.includes('wallet')
+              ? 'Unable to load account data. Please try again.'
+              : `Unable to load ${failures.join(', ')}. Please try again.`,
+          );
+        }
+        hasLoadedOnceRef.current = true;
+      } catch {
+        if (fetchGenerationRef.current === generation) {
+          setError('Unable to load account data. Please try again.');
+        }
+      } finally {
+        if (fetchGenerationRef.current === generation) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
-    } catch {
-      if (fetchGenerationRef.current === generation) {
-        setError('Unable to load account data. Please try again or contact support@avenorabank.org.');
-      }
-    } finally {
-      if (fetchGenerationRef.current === generation) {
-        setLoading(false);
-      }
-    }
-  }, [token, currencyKey, walletCurrencyCodes]);
+    },
+    [token, currencyKey, walletCurrencyCodes],
+  );
 
   useEffect(() => {
-    fetchAll();
+    void fetchAll({ soft: false });
   }, [fetchAll, userId]);
 
   // Refetch when the tab becomes visible again (e.g. after admin posts funds).
@@ -152,7 +184,7 @@ export function usePortalDashboardData({
     if (!token) return;
     const onVisible = () => {
       if (document.visibilityState === 'visible') {
-        void fetchAll();
+        void fetchAll({ soft: true });
       }
     };
     document.addEventListener('visibilitychange', onVisible);
@@ -172,7 +204,7 @@ export function usePortalDashboardData({
   useEffect(() => {
     if (!token || !hasPendingReview) return;
     const id = window.setInterval(() => {
-      void fetchAll();
+      void fetchAll({ soft: true });
     }, 8000);
     return () => window.clearInterval(id);
   }, [token, hasPendingReview, fetchAll]);
@@ -184,7 +216,9 @@ export function usePortalDashboardData({
     grantsSummary,
     transactions,
     loading,
+    refreshing,
     error,
-    refetch: fetchAll,
+    refetch: () => fetchAll({ soft: false }),
+    softRefetch: () => fetchAll({ soft: true }),
   };
 }

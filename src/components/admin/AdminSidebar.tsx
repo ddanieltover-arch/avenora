@@ -21,14 +21,26 @@ export const ADMIN_LIVE_TABS: {
   id: Exclude<AdminTabId, 'webhooks' | 'readiness'>;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
+  /** If set, tab is only shown for these roles (matches API RBAC). */
+  roles?: string[];
 }[] = [
   { id: 'overview', label: 'Overview', icon: Activity },
   { id: 'customers', label: 'Customers', icon: Users },
-  { id: 'kyc', label: 'KYC Queue', icon: FileCheck },
+  {
+    id: 'kyc',
+    label: 'KYC Queue',
+    icon: FileCheck,
+    roles: ['COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN'],
+  },
   { id: 'transactions', label: 'Transactions', icon: Search },
   { id: 'loans_grants', label: 'Loans & Grants', icon: Award },
   { id: 'cards', label: 'Cards', icon: CreditCard },
-  { id: 'audit', label: 'Audit Trail', icon: History },
+  {
+    id: 'audit',
+    label: 'Audit Trail',
+    icon: History,
+    roles: ['COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN'],
+  },
 ];
 
 interface AdminSidebarProps {
@@ -37,6 +49,7 @@ interface AdminSidebarProps {
   mobileOpen: boolean;
   onMobileClose: () => void;
   onBackToPublic: () => void;
+  userRole?: string;
 }
 
 export const AdminSidebar: React.FC<AdminSidebarProps> = ({
@@ -45,11 +58,25 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
   mobileOpen,
   onMobileClose,
   onBackToPublic,
+  userRole,
 }) => {
+  const visibleTabs = ADMIN_LIVE_TABS.filter((item) => {
+    if (!item.roles) return true;
+    return Boolean(userRole && item.roles.includes(userRole));
+  });
+
   const handleNav = (tab: AdminTabId) => {
     onTabChange(tab);
     onMobileClose();
   };
+
+  // If SUPPORT lands on a gated tab via URL, send them to overview.
+  React.useEffect(() => {
+    const current = ADMIN_LIVE_TABS.find((t) => t.id === activeTab);
+    if (current?.roles && (!userRole || !current.roles.includes(userRole))) {
+      onTabChange('overview');
+    }
+  }, [activeTab, userRole, onTabChange]);
 
   const navButtonClass = (selected: boolean) =>
     `w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-[13px] font-semibold transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#19A77A]/50 focus-visible:ring-offset-2 focus-visible:ring-offset-white ${
@@ -90,7 +117,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
         </div>
 
         <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1" role="navigation">
-          {ADMIN_LIVE_TABS.map((item) => {
+          {visibleTabs.map((item) => {
             const Icon = item.icon;
             const selected = activeTab === item.id;
             return (

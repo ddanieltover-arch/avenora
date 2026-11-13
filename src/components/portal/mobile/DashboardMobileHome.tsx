@@ -75,7 +75,7 @@ export const DashboardMobileHome: React.FC<DashboardMobileHomeProps> = ({
   transactions,
   loading,
   error,
-  onRetry: _onRetry,
+  onRetry,
   onTabChange,
   onOpenWalletModal,
 }) => {
@@ -132,13 +132,22 @@ export const DashboardMobileHome: React.FC<DashboardMobileHomeProps> = ({
       {error && (
         <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-900 flex items-center justify-between gap-2">
           <span>{error}</span>
-          <a
-            href="mailto:support@avenorabank.org?subject=Account%20suspension%20support"
-            className="shrink-0 font-semibold text-rose-800 flex items-center gap-1 rounded-lg bg-white border border-rose-200 px-2.5 py-1.5"
-          >
-            <Mail className="w-3.5 h-3.5" aria-hidden />
-            Email support
-          </a>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={onRetry}
+              className="font-semibold text-white bg-[#075B46] rounded-lg px-2.5 py-1.5 cursor-pointer"
+            >
+              Retry
+            </button>
+            <a
+              href="mailto:support@avenorabank.org?subject=Account%20suspension%20support"
+              className="font-semibold text-rose-800 flex items-center gap-1 rounded-lg bg-white border border-rose-200 px-2.5 py-1.5"
+            >
+              <Mail className="w-3.5 h-3.5" aria-hidden />
+              Email support
+            </a>
+          </div>
         </div>
       )}
 

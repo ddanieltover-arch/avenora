@@ -108,7 +108,8 @@ export const WalletView: React.FC<WalletViewProps> = ({
   const { t } = useLocalization();
 
   const [accounts, setAccounts] = useState<WalletAccount[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(Boolean(token));
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [activeModal, setActiveModal] = useState<WalletModalId | null>(null);
   const [walletActionsOpen, setWalletActionsOpen] = useState(false);
 
@@ -195,6 +196,7 @@ export const WalletView: React.FC<WalletViewProps> = ({
   const fetchWallet = async () => {
     if (!token) return;
     setLoading(true);
+    setLoadError(null);
     try {
       const res = await fetch('/api/v1/wallets/me', {
         headers: { Authorization: `Bearer ${token}` },
@@ -202,9 +204,14 @@ export const WalletView: React.FC<WalletViewProps> = ({
       const data = await res.json();
       if (res.ok && data.wallet?.accounts) {
         setAccounts(filterAccounts(data.wallet.accounts as WalletAccount[]));
+      } else {
+        setAccounts([]);
+        setLoadError(data.detail || data.title || 'Unable to load wallet. Please try again.');
       }
     } catch (err) {
       console.error('Failed to fetch wallet', err);
+      setAccounts([]);
+      setLoadError('Unable to load wallet. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -683,6 +690,22 @@ export const WalletView: React.FC<WalletViewProps> = ({
 
   return (
     <div className="space-y-6">
+      {loadError && (
+        <div
+          className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900"
+          role="alert"
+        >
+          <span>{loadError}</span>
+          <button
+            type="button"
+            onClick={() => void fetchWallet()}
+            disabled={loading}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#075B46] text-white text-xs font-semibold hover:bg-[#063D32] disabled:opacity-50 cursor-pointer shrink-0"
+          >
+            Retry
+          </button>
+        </div>
+      )}
       {transactionsFrozen && (
         <div
           className={`rounded-xl border-2 px-4 py-3 text-sm ${

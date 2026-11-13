@@ -29,6 +29,7 @@ import { ProfileSecurityView } from './ProfileSecurityView.tsx';
 import { HelpSupportView } from './HelpSupportView.tsx';
 import { Lock, ShieldCheck, ChevronLeft } from 'lucide-react';
 import type { PortalTabId } from '../routing/appRoutes.ts';
+import { buildPublicPath, navigateToPath } from '../routing/appRoutes.ts';
 import { PortalSidebar } from './portal/PortalSidebar.tsx';
 import { PortalTopHeader } from './portal/PortalTopHeader.tsx';
 import { DashboardOverview } from './portal/DashboardOverview.tsx';
@@ -74,11 +75,20 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ activeTab, onTab
     loading: dashboardLoading,
     error: dashboardError,
     refetch: refetchDashboard,
+    softRefetch: softRefetchDashboard,
   } = usePortalDashboardData({
     token,
     walletCurrencyCodes,
     userId: user?.id,
   });
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user || !token) {
+      navigateToPath(buildPublicPath('login'), { replace: true });
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }
+  }, [authLoading, user, token]);
 
   useEffect(() => {
     if (activeTab !== 'profile') {
@@ -112,9 +122,9 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ activeTab, onTab
   useEffect(() => {
     if (!token) return;
     if (activeTab === 'overview' || activeTab === 'wallets' || activeTab === 'transactions') {
-      refetchDashboard();
+      softRefetchDashboard();
     }
-  }, [activeTab, token, refetchDashboard]);
+  }, [activeTab, token, softRefetchDashboard]);
 
   useEffect(() => {
     mobileMainRef.current?.scrollTo({ top: 0, behavior: 'auto' });
@@ -177,6 +187,22 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ activeTab, onTab
     onTabChange,
     onOpenWalletModal: openWalletDeepLink,
   };
+
+  if (authLoading && !user) {
+    return (
+      <div className="app-viewport-shell bg-[#F1F4F1] text-[#17231F] font-sans flex items-center justify-center">
+        <div className="text-sm text-[#68746E]">Checking secure session…</div>
+      </div>
+    );
+  }
+
+  if (!user || !token) {
+    return (
+      <div className="app-viewport-shell bg-[#F1F4F1] text-[#17231F] font-sans flex items-center justify-center">
+        <div className="text-sm text-[#68746E]">Redirecting to sign in…</div>
+      </div>
+    );
+  }
 
   const renderDesktopTab = () => (
     <>

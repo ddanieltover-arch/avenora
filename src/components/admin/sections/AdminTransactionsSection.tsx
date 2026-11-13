@@ -207,13 +207,20 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
                                 {dep.submittedAt ? new Date(dep.submittedAt).toLocaleString() : '—'}
                               </AdminTd>
                               <AdminTd className="text-right space-x-2">
-                                <AdminButton type="button" size="sm" variant="success" onClick={() => approvePendingDeposit(dep.id)}>
+                                <AdminButton
+                                  type="button"
+                                  size="sm"
+                                  variant="success"
+                                  disabled={loading}
+                                  onClick={() => approvePendingDeposit(dep.id)}
+                                >
                                   Approve
                                 </AdminButton>
                                 <AdminButton
                                   type="button"
                                   size="sm"
                                   variant="danger"
+                                  disabled={loading}
                                   onClick={() => {
                                     setDepositRejectId(dep.id);
                                     setDepositRejectReason('');
@@ -326,13 +333,20 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
                                 {wth.submittedAt ? new Date(wth.submittedAt).toLocaleString() : '—'}
                               </AdminTd>
                               <AdminTd className="text-right space-x-2">
-                                <AdminButton type="button" size="sm" variant="success" onClick={() => approvePendingWithdrawal(wth.id)}>
+                                <AdminButton
+                                  type="button"
+                                  size="sm"
+                                  variant="success"
+                                  disabled={loading}
+                                  onClick={() => approvePendingWithdrawal(wth.id)}
+                                >
                                   Approve
                                 </AdminButton>
                                 <AdminButton
                                   type="button"
                                   size="sm"
                                   variant="danger"
+                                  disabled={loading}
                                   onClick={() => {
                                     setWithdrawalRejectId(wth.id);
                                     setWithdrawalRejectReason('');
@@ -493,6 +507,7 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
                                             type="button"
                                             size="sm"
                                             variant="success"
+                                            disabled={loading}
                                             onClick={() => approvePendingDeposit(depositKey)}
                                           >
                                             Approve
@@ -501,6 +516,7 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
                                             type="button"
                                             size="sm"
                                             variant="danger"
+                                            disabled={loading}
                                             onClick={() => {
                                               setDepositRejectId(depositKey);
                                               setDepositRejectReason('');
@@ -519,6 +535,7 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
                                             type="button"
                                             size="sm"
                                             variant="success"
+                                            disabled={loading}
                                             onClick={() => approvePendingWithdrawal(withdrawalKey)}
                                           >
                                             Approve
@@ -527,6 +544,7 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
                                             type="button"
                                             size="sm"
                                             variant="danger"
+                                            disabled={loading}
                                             onClick={() => {
                                               setWithdrawalRejectId(withdrawalKey);
                                               setWithdrawalRejectReason('');
@@ -572,7 +590,7 @@ export const AdminTransactionsSection: React.FC<AdminTransactionsSectionProps> =
                     open={Boolean(txDetailData)}
                     onClose={() => setTxDetailData(null)}
                     title="Transaction Detail & Double-Entry Ledger Lines"
-                    description={`Reference: ${txDetailData.transaction.referenceNumber} · Status: ${txDetailData.transaction.status}`}
+                    description={`Reference: ${txDetailData.transaction?.referenceNumber ?? '—'} · Status: ${txDetailData.transaction?.status ?? '—'}`}
                     size="lg"
                     footer={
                       <AdminButton variant="secondary" onClick={() => setTxDetailData(null)}>

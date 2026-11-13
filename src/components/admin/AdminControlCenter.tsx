@@ -191,10 +191,14 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       const res = await fetch(`/api/v1/admin/customers?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.ok) {
-        const data = await res.json();
-        setCustomers(data.users || []);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showError(data.detail || data.title || 'Failed to load customers');
+        return;
       }
+      setCustomers(data.users || []);
+    } catch (e: any) {
+      showError(e.message || 'Failed to load customers');
     } finally {
       setLoading(false);
     }
@@ -418,10 +422,14 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       const res = await fetch(`/api/v1/admin/kyc/queue?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.ok) {
-        const data = await res.json();
-        setKycCases(data.profiles || []);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showError(data.detail || data.title || 'Failed to load KYC queue');
+        return;
       }
+      setKycCases(data.profiles || []);
+    } catch (e: any) {
+      showError(e.message || 'Failed to load KYC queue');
     } finally {
       setLoading(false);
     }
@@ -516,13 +524,15 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
         },
         body: JSON.stringify({}),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setSuccessNotice('Deposit approved — funds released from hold to customer available balance.');
         await refreshAfterMoneyMutation(data.deposit?.userId || data.userId);
       } else {
         showError(data.detail || data.title || 'Could not approve deposit.');
       }
+    } catch (e: any) {
+      showError(e.message || 'Could not approve deposit.');
     } finally {
       setLoading(false);
     }
@@ -540,7 +550,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
         },
         body: JSON.stringify({ reason: depositRejectReason.trim() }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setSuccessNotice('Deposit rejected — hold amount removed from customer wallet.');
         setDepositRejectId(null);
@@ -549,6 +559,8 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       } else {
         showError(data.detail || data.title || 'Could not reject deposit.');
       }
+    } catch (e: any) {
+      showError(e.message || 'Could not reject deposit.');
     } finally {
       setLoading(false);
     }
@@ -581,13 +593,15 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
         },
         body: JSON.stringify({}),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setSuccessNotice('Withdrawal approved — payout recorded and hold cleared.');
         await refreshAfterMoneyMutation(data.withdrawal?.userId || data.userId);
       } else {
         showError(data.detail || data.title || 'Could not approve withdrawal.');
       }
+    } catch (e: any) {
+      showError(e.message || 'Could not approve withdrawal.');
     } finally {
       setLoading(false);
     }
@@ -605,7 +619,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
         },
         body: JSON.stringify({ reason: withdrawalRejectReason.trim() }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setSuccessNotice('Withdrawal rejected — amount returned from hold to available balance.');
         setWithdrawalRejectId(null);
@@ -614,6 +628,8 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       } else {
         showError(data.detail || data.title || 'Could not reject withdrawal.');
       }
+    } catch (e: any) {
+      showError(e.message || 'Could not reject withdrawal.');
     } finally {
       setLoading(false);
     }
@@ -656,10 +672,14 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       const res = await fetch(`/api/v1/admin/transactions/${txId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.ok) {
-        const data = await res.json();
-        setTxDetailData(data);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showError(data.detail || data.title || 'Failed to load transaction details');
+        return;
       }
+      setTxDetailData(data);
+    } catch (e: any) {
+      showError(e.message || 'Failed to load transaction details');
     } finally {
       setLoading(false);
     }
@@ -704,22 +724,30 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
     try {
       setLoading(true);
       const [lRes, gRes, gpRes] = await Promise.all([
-        fetch('/api/v1/loans/applications?all=true', { headers: { Authorization: `Bearer ${token}` } }),
-        fetch('/api/v1/grants/applications?all=true', { headers: { Authorization: `Bearer ${token}` } }),
-        fetch('/api/v1/grants/programs', { headers: { Authorization: `Bearer ${token}` } }),
+        fetch('/api/v1/admin/loans', { headers: { Authorization: `Bearer ${token}` } }),
+        fetch('/api/v1/admin/grants', { headers: { Authorization: `Bearer ${token}` } }),
+        fetch('/api/v1/admin/grants/programs', { headers: { Authorization: `Bearer ${token}` } }),
       ]);
-      if (lRes.ok) {
-        const lData = await lRes.json();
+      const [lData, gData, gpData] = await Promise.all([
+        lRes.json().catch(() => ({})),
+        gRes.json().catch(() => ({})),
+        gpRes.json().catch(() => ({})),
+      ]);
+      if (!lRes.ok) {
+        showError(lData.detail || lData.title || 'Failed to load loan applications');
+      } else {
         setLoanApplications(lData.applications || []);
       }
-      if (gRes.ok) {
-        const gData = await gRes.json();
+      if (!gRes.ok) {
+        showError(gData.detail || gData.title || 'Failed to load grant applications');
+      } else {
         setGrantApplications(gData.applications || []);
       }
       if (gpRes.ok) {
-        const gpData = await gpRes.json();
         setGrantPrograms(gpData.programs || []);
       }
+    } catch (e: any) {
+      showError(e.message || 'Failed to load loans and grants');
     } finally {
       setLoading(false);
     }
@@ -730,7 +758,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
     try {
       setLoading(true);
       setErrorNotice(null);
-      const res = await fetch(`/api/v1/loans/applications/${selectedLoan.id}/review`, {
+      const res = await fetch(`/api/v1/admin/loans/${selectedLoan.id}/review`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -763,7 +791,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
     try {
       setLoading(true);
       setErrorNotice(null);
-      const res = await fetch(`/api/v1/grants/applications/${selectedGrant.id}/review`, {
+      const res = await fetch(`/api/v1/admin/grants/${selectedGrant.id}/review`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -825,10 +853,14 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       const res = await fetch('/api/v1/admin/cards', {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.ok) {
-        const data = await res.json();
-        setCards(data.cards || []);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showError(data.detail || data.title || 'Failed to load cards');
+        return;
       }
+      setCards(data.cards || []);
+    } catch (e: any) {
+      showError(e.message || 'Failed to load cards');
     } finally {
       setLoading(false);
     }
@@ -945,10 +977,14 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       const res = await fetch(`/api/v1/admin/audit-logs?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.ok) {
-        const data = await res.json();
-        setAuditLogs(data.records || []);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showError(data.detail || data.title || 'Failed to load audit logs');
+        return;
       }
+      setAuditLogs(data.records || []);
+    } catch (e: any) {
+      showError(e.message || 'Failed to load audit logs');
     } finally {
       setLoading(false);
     }
@@ -1104,6 +1140,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
           mobileOpen={mobileNavOpen}
           onMobileClose={() => setMobileNavOpen(false)}
           onBackToPublic={onBackToPublic}
+          userRole={user.role}
         />
 
         <div className="flex-1 flex flex-col min-w-0 min-h-0">
@@ -1117,7 +1154,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
           />
 
           <div className="hidden lg:block">
-            <AdminButtonNav activeTab={activeTab} onTabChange={onTabChange} />
+            <AdminButtonNav activeTab={activeTab} onTabChange={onTabChange} userRole={user.role} />
             </div>
 
           <main className="app-scroll-pane flex-1">

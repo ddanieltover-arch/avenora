@@ -192,18 +192,18 @@ export const AdminOverviewSection: React.FC<AdminOverviewSectionProps> = ({
             <Users className="w-4 h-4 text-brand-primary" />
           </div>
           <div className="text-2xl font-bold text-brand-deep">
-            {overviewData ? overviewData.customers.total : '—'}
+            {overviewData?.customers?.total ?? '—'}
           </div>
           <div className="mt-2 text-xs text-brand-muted flex items-center justify-between border-t border-slate-100 pt-2">
             <span>
-              Active: <strong className="text-emerald-700">{overviewData?.customers.active ?? 0}</strong>
+              Active: <strong className="text-emerald-700">{overviewData?.customers?.active ?? 0}</strong>
             </span>
             <span>
               Suspended:{' '}
-              <strong className="text-amber-700">{overviewData?.customers.suspended ?? 0}</strong>
+              <strong className="text-amber-700">{overviewData?.customers?.suspended ?? 0}</strong>
             </span>
             <span>
-              Locked: <strong className="text-rose-700">{overviewData?.customers.locked ?? 0}</strong>
+              Locked: <strong className="text-rose-700">{overviewData?.customers?.locked ?? 0}</strong>
             </span>
           </div>
         </button>
@@ -218,19 +218,19 @@ export const AdminOverviewSection: React.FC<AdminOverviewSectionProps> = ({
             <FileCheck className="w-4 h-4 text-brand-primary" />
           </div>
           <div className="text-2xl font-bold text-brand-deep">
-            {overviewData ? overviewData.kycQueue.pendingReview : '—'}
+            {overviewData?.kycQueue?.pendingReview ?? '—'}
           </div>
           <div className="mt-2 text-xs text-brand-muted flex items-center justify-between border-t border-slate-100 pt-2">
             <span>
               Approved:{' '}
-              <strong className="text-emerald-700">{overviewData?.kycQueue.approved ?? 0}</strong>
+              <strong className="text-emerald-700">{overviewData?.kycQueue?.approved ?? 0}</strong>
             </span>
             <span>
               Rejected:{' '}
-              <strong className="text-rose-700">{overviewData?.kycQueue.rejected ?? 0}</strong>
+              <strong className="text-rose-700">{overviewData?.kycQueue?.rejected ?? 0}</strong>
             </span>
             <span className="text-[11px] text-amber-700 font-semibold">
-              &gt;24h: {overviewData?.kycQueue.aging.oneToThreeDays ?? 0}
+              &gt;24h: {overviewData?.kycQueue?.aging?.oneToThreeDays ?? 0}
             </span>
           </div>
         </button>
@@ -299,16 +299,16 @@ export const AdminOverviewSection: React.FC<AdminOverviewSectionProps> = ({
             <DollarSign className="w-4 h-4 text-brand-primary" />
           </div>
           <div className="text-2xl font-bold text-brand-deep">
-            {overviewData ? overviewData.transactions.total : '—'}
+            {overviewData?.transactions?.total ?? '—'}
           </div>
           <div className="mt-2 text-xs text-brand-muted flex items-center justify-between border-t border-slate-100 pt-2">
             <span>
               Posted:{' '}
-              <strong className="text-emerald-700">{overviewData?.transactions.posted ?? 0}</strong>
+              <strong className="text-emerald-700">{overviewData?.transactions?.posted ?? 0}</strong>
             </span>
             <span>
               Compensated/Reversed:{' '}
-              <strong className="text-amber-700">{overviewData?.transactions.reversed ?? 0}</strong>
+              <strong className="text-amber-700">{overviewData?.transactions?.reversed ?? 0}</strong>
             </span>
           </div>
         </button>
