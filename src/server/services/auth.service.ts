@@ -504,7 +504,8 @@ export class AuthService {
     if (!isKycBypassEnabled() && user.role === 'CUSTOMER' && user.kycStatus === 'APPROVED') {
       try {
         const { defaultKycService } = await import('./kyc.service.ts');
-        const profile = defaultKycService.getOrCreateProfile(user.id);
+        await defaultKycService.whenReady();
+        const profile = await defaultKycService.resolveOrCreateProfile(user.id);
         const bypassOnly =
           !profile.reviewedAt ||
           profile.residentialAddress?.street === 'Prototype address pending KYC submission';

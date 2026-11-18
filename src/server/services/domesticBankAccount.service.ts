@@ -167,7 +167,8 @@ export class DomesticBankAccountService {
     }
 
     const { defaultKycService } = await import('./kyc.service.ts');
-    const kycProfile = defaultKycService.getOrCreateProfile(params.userId);
+    await defaultKycService.whenReady();
+    const kycProfile = await defaultKycService.resolveOrCreateProfile(params.userId);
 
     // Bypass only: force-approve so identifiers can unlock without the KYC workflow.
     if (bypass) {

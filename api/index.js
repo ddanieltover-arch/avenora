@@ -5221,7 +5221,8 @@ var init_domesticBankAccount_service = __esm({
           return this.getPrimaryAccountForUser(params.userId);
         }
         const { defaultKycService: defaultKycService2 } = await Promise.resolve().then(() => (init_kyc_service(), kyc_service_exports));
-        const kycProfile = defaultKycService2.getOrCreateProfile(params.userId);
+        await defaultKycService2.whenReady();
+        const kycProfile = await defaultKycService2.resolveOrCreateProfile(params.userId);
         if (bypass) {
           kycProfile.status = "APPROVED";
           kycProfile.verifiedCountryCode = kycProfile.verifiedCountryCode || user.countryCode;
@@ -6613,7 +6614,6 @@ var init_kyc_service = __esm({
             }
           }
           this.profilesByUserId.set(userId, profile);
-          this.persistProfileSoon(profile);
         }
         return profile;
       }
@@ -6918,6 +6918,7 @@ var init_kyc_service = __esm({
       }
       /**
        * Admin KYC queue: every CUSTOMER has a profile row, sorted newest → oldest.
+       * Loads from Neon first so we never invent empty shells over real submissions.
        */
       async getAllProfilesForReview(reviewerRole) {
         const allowedRoles = ["SUPPORT", "COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"];
@@ -6926,10 +6927,17 @@ var init_kyc_service = __esm({
         }
         await this.readyPromise;
         const customers = await defaultAuthService.listCustomers();
+        const byUserId = /* @__PURE__ */ new Map();
         for (const customer of customers) {
-          this.getOrCreateProfile(customer.id);
+          const profile = await this.resolveOrCreateProfile(customer.id);
+          byUserId.set(customer.id, profile);
         }
-        return Array.from(this.profilesByUserId.values()).sort(
+        for (const profile of this.profilesByUserId.values()) {
+          if (!byUserId.has(profile.userId)) {
+            byUserId.set(profile.userId, profile);
+          }
+        }
+        return Array.from(byUserId.values()).sort(
           (a, b) => this.profileRecencyMs(b) - this.profileRecencyMs(a)
         );
       }
@@ -7414,7 +7422,8 @@ var init_auth_service = __esm({
         if (!isKycBypassEnabled() && user.role === "CUSTOMER" && user.kycStatus === "APPROVED") {
           try {
             const { defaultKycService: defaultKycService2 } = await Promise.resolve().then(() => (init_kyc_service(), kyc_service_exports));
-            const profile = defaultKycService2.getOrCreateProfile(user.id);
+            await defaultKycService2.whenReady();
+            const profile = await defaultKycService2.resolveOrCreateProfile(user.id);
             const bypassOnly = !profile.reviewedAt || profile.residentialAddress?.street === "Prototype address pending KYC submission";
             if (bypassOnly) {
               const restoredStatus = profile.submittedAt ? "SUBMITTED" : "NOT_STARTED";
@@ -16593,7 +16602,8 @@ adminRouter.get(
         return;
       }
       const safeUser = defaultAuthService.sanitizeUser(user);
-      const kycProfile = defaultKycService.getOrCreateProfile(customerId);
+      await defaultKycService.whenReady();
+      const kycProfile = await defaultKycService.resolveOrCreateProfile(customerId);
       const wallet = defaultWalletService.getOrCreateUserWallet(customerId);
       const ledgerAccounts = defaultLedgerService.getUserAccounts(customerId);
       const cards = defaultCardService.getUserCards(customerId).map((c) => {
@@ -16775,7 +16785,7 @@ adminRouter.get(
       const targetUserId = req.params.userId;
       await defaultAuthService.whenReady();
       await defaultKycService.whenReady();
-      const profile = defaultKycService.getOrCreateProfile(targetUserId);
+      const profile = await defaultKycService.resolveOrCreateProfile(targetUserId);
       res.json({ profile: await defaultKycService.enrichProfileForAdmin(profile) });
     } catch (err) {
       next(err);
@@ -17832,7 +17842,8 @@ domesticBankAccountRouter.post(
   async (req, res, next) => {
     try {
       const validated = RetrySchema.parse(req.body);
-      const profile = defaultKycService.getOrCreateProfile(validated.userId);
+      await defaultKycService.whenReady();
+      const profile = await defaultKycService.resolveOrCreateProfile(validated.userId);
       const outcome = await defaultDomesticBankAccountService.retryGenerationForUser({
         actorUserId: req.user.id,
         actorRole: req.user.role,

@@ -437,8 +437,9 @@ export class KycService {
         }
       }
 
+      // In-memory placeholder only. Never persist empty shells — upserting
+      // them would wipe a real Neon submission on cache miss / cold start.
       this.profilesByUserId.set(userId, profile);
-      this.persistProfileSoon(profile);
     }
     return profile;
   }
@@ -877,6 +878,7 @@ export class KycService {
 
   /**
    * Admin KYC queue: every CUSTOMER has a profile row, sorted newest → oldest.
+   * Loads from Neon first so we never invent empty shells over real submissions.
    */
   public async getAllProfilesForReview(reviewerRole: UserRole): Promise<KycProfileRecord[]> {
     const allowedRoles: UserRole[] = ['SUPPORT', 'COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN'];
@@ -885,10 +887,18 @@ export class KycService {
     }
     await this.readyPromise;
     const customers = await defaultAuthService.listCustomers();
+    const byUserId = new Map<string, KycProfileRecord>();
     for (const customer of customers) {
-      this.getOrCreateProfile(customer.id);
+      const profile = await this.resolveOrCreateProfile(customer.id);
+      byUserId.set(customer.id, profile);
     }
-    return Array.from(this.profilesByUserId.values()).sort(
+    // Keep any orphan profiles (e.g. staff test rows) already in cache/DB hydrate.
+    for (const profile of this.profilesByUserId.values()) {
+      if (!byUserId.has(profile.userId)) {
+        byUserId.set(profile.userId, profile);
+      }
+    }
+    return Array.from(byUserId.values()).sort(
       (a, b) => this.profileRecencyMs(b) - this.profileRecencyMs(a),
     );
   }

@@ -324,7 +324,8 @@ adminRouter.get(
       }
 
       const safeUser = defaultAuthService.sanitizeUser(user);
-      const kycProfile = defaultKycService.getOrCreateProfile(customerId);
+      await defaultKycService.whenReady();
+      const kycProfile = await defaultKycService.resolveOrCreateProfile(customerId);
       const wallet = defaultWalletService.getOrCreateUserWallet(customerId);
       const ledgerAccounts = defaultLedgerService.getUserAccounts(customerId);
       const cards = defaultCardService.getUserCards(customerId).map((c) => {
@@ -556,7 +557,7 @@ adminRouter.get(
       const targetUserId = req.params.userId!;
       await defaultAuthService.whenReady();
       await defaultKycService.whenReady();
-      const profile = defaultKycService.getOrCreateProfile(targetUserId);
+      const profile = await defaultKycService.resolveOrCreateProfile(targetUserId);
       res.json({ profile: await defaultKycService.enrichProfileForAdmin(profile) });
     } catch (err) {
       next(err);

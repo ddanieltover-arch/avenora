@@ -84,7 +84,8 @@ domesticBankAccountRouter.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const validated = RetrySchema.parse(req.body);
-      const profile = defaultKycService.getOrCreateProfile(validated.userId);
+      await defaultKycService.whenReady();
+      const profile = await defaultKycService.resolveOrCreateProfile(validated.userId);
       const outcome = await defaultDomesticBankAccountService.retryGenerationForUser({
         actorUserId: req.user!.id,
         actorRole: req.user!.role,
