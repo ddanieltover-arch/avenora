@@ -553,44 +553,8 @@ export class AuthService {
       }
     }
 
-    // Detect new device before session create (new session would otherwise always match)
-    const isNewDevice = !Array.from(this.sessionsByTokenHash.values()).some(
-      (s) => s.userId === user.id && s.userAgent === params.userAgent,
-    );
-
     // Create session (with session rotation)
     const authResult = await this.createSession(user, params.ipAddress, params.userAgent);
-
-    // Staff / admin logins do not receive customer login notification emails
-    const isStaffLogin =
-      user.role === 'SUPPORT' ||
-      user.role === 'COMPLIANCE_REVIEWER' ||
-      user.role === 'ADMIN' ||
-      user.role === 'SUPER_ADMIN';
-    if (!isStaffLogin) {
-      const signedInAt = new Date().toISOString();
-      voidEmail(
-        'login-success',
-        defaultEmailService.sendLoginSuccessEmail({
-          to: user.email,
-          fullName: user.fullName,
-          ipAddress: params.ipAddress,
-          signedInAt,
-        }),
-      );
-      if (isNewDevice) {
-        voidEmail(
-          'login-new-device',
-          defaultEmailService.sendLoginNewDeviceEmail({
-            to: user.email,
-            fullName: user.fullName,
-            ipAddress: params.ipAddress,
-            userAgent: params.userAgent,
-            signedInAt,
-          }),
-        );
-      }
-    }
     return { requiresMfa: false, authResult };
   }
 
@@ -644,6 +608,33 @@ export class AuthService {
     }
   }
 
+  /** Public cache+DB user lookup for services that must not miss cold serverless instances. */
+  public async ensureUserById(userId: string): Promise<UserRecord | null> {
+    return this.resolveUserById(userId);
+  }
+
+  /**
+   * Re-read mutable account activation fields from Neon so multi-instance
+   * KYC approvals are visible without waiting for a process restart.
+   */
+  private async refreshAccountActivationFields(user: UserRecord): Promise<void> {
+    try {
+      const row = await prisma.user.findUnique({
+        where: { id: user.id },
+        select: { status: true, kycStatus: true },
+      });
+      if (!row) return;
+      if (user.status !== row.status) {
+        user.status = row.status as UserStatus;
+      }
+      if (user.kycStatus !== row.kycStatus) {
+        user.kycStatus = row.kycStatus as KycStatus;
+      }
+    } catch (err) {
+      console.error('[auth] failed to refresh account status from database:', user.id, err);
+    }
+  }
+
   /**
    * Validates a session token and returns the authenticated user.
    */
@@ -691,6 +682,9 @@ export class AuthService {
     if (!user) {
       return null;
     }
+
+    // Pick up status/kycStatus written by another instance after KYC review.
+    await this.refreshAccountActivationFields(user);
 
     // Keep sessions valid for PENDING_VERIFICATION / SUSPENDED / LOCKED so
     // customers can sign in, complete KYC, view notices, and sign out.

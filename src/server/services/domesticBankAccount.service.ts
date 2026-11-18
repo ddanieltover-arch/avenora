@@ -369,7 +369,8 @@ export class DomesticBankAccountService {
       }
       this.auditGeneration(params.userId, generated, params.correlationId);
 
-      if (user) {
+      // Customers only — staff/admin accounts do not receive domestic-account emails
+      if (user && user.role === 'CUSTOMER') {
         const accountSummary =
           generated.formattedValue || generated.maskedValue || generated.rawValue || generated.id;
         voidEmail(
