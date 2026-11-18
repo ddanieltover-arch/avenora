@@ -290,60 +290,60 @@ export class AuthService {
 
     const staff: Array<Omit<UserRecord, 'failedLoginAttempts' | 'createdAt' | 'updatedAt'>> = [
       {
-        id: 'usr_staff_support_01',
-        email: 'support.lead@avenora.internal',
-        passwordHash: hash,
-        fullName: 'Elena Rostova (Support)',
-        phoneNumber: '12025550200',
-        transactionPinHash: defaultPinHash,
-        countryCode: 'US',
-        role: 'SUPPORT',
-        status: 'ACTIVE',
-        kycStatus: 'APPROVED',
-        mfaEnabled: true,
-        mfaSecret: 'JBSWY3DPEHPK3PXP',
+      id: 'usr_staff_support_01',
+      email: 'support.lead@avenora.internal',
+      passwordHash: hash,
+      fullName: 'Elena Rostova (Support)',
+      phoneNumber: '12025550200',
+      transactionPinHash: defaultPinHash,
+      countryCode: 'US',
+      role: 'SUPPORT',
+      status: 'ACTIVE',
+      kycStatus: 'APPROVED',
+      mfaEnabled: true,
+      mfaSecret: 'JBSWY3DPEHPK3PXP',
       },
       {
-        id: 'usr_staff_compliance_01',
-        email: 'compliance.lead@avenora.internal',
-        passwordHash: hash,
-        fullName: 'Maria Chen (Compliance)',
-        phoneNumber: '12025550201',
-        transactionPinHash: defaultPinHash,
-        countryCode: 'US',
-        role: 'COMPLIANCE_REVIEWER',
-        status: 'ACTIVE',
-        kycStatus: 'APPROVED',
-        mfaEnabled: true,
-        mfaSecret: 'JBSWY3DPEHPK3PXP',
+      id: 'usr_staff_compliance_01',
+      email: 'compliance.lead@avenora.internal',
+      passwordHash: hash,
+      fullName: 'Maria Chen (Compliance)',
+      phoneNumber: '12025550201',
+      transactionPinHash: defaultPinHash,
+      countryCode: 'US',
+      role: 'COMPLIANCE_REVIEWER',
+      status: 'ACTIVE',
+      kycStatus: 'APPROVED',
+      mfaEnabled: true,
+      mfaSecret: 'JBSWY3DPEHPK3PXP',
       },
       {
-        id: 'usr_staff_ops_admin_01',
-        email: 'admin.ops@avenora.internal',
-        passwordHash: hash,
-        fullName: 'Marcus Sterling (Ops Admin)',
-        phoneNumber: '12025550202',
-        transactionPinHash: defaultPinHash,
-        countryCode: 'US',
-        role: 'ADMIN',
-        status: 'ACTIVE',
-        kycStatus: 'APPROVED',
-        mfaEnabled: true,
-        mfaSecret: 'JBSWY3DPEHPK3PXP',
+      id: 'usr_staff_ops_admin_01',
+      email: 'admin.ops@avenora.internal',
+      passwordHash: hash,
+      fullName: 'Marcus Sterling (Ops Admin)',
+      phoneNumber: '12025550202',
+      transactionPinHash: defaultPinHash,
+      countryCode: 'US',
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      kycStatus: 'APPROVED',
+      mfaEnabled: true,
+      mfaSecret: 'JBSWY3DPEHPK3PXP',
       },
       {
-        id: 'usr_staff_admin_01',
-        email: 'admin.super@avenora.internal',
-        passwordHash: hash,
-        fullName: 'David Thorne (Super Admin)',
-        phoneNumber: '12025550203',
-        transactionPinHash: defaultPinHash,
-        countryCode: 'US',
-        role: 'SUPER_ADMIN',
-        status: 'ACTIVE',
-        kycStatus: 'APPROVED',
-        mfaEnabled: true,
-        mfaSecret: 'JBSWY3DPEHPK3PXP',
+      id: 'usr_staff_admin_01',
+      email: 'admin.super@avenora.internal',
+      passwordHash: hash,
+      fullName: 'David Thorne (Super Admin)',
+      phoneNumber: '12025550203',
+      transactionPinHash: defaultPinHash,
+      countryCode: 'US',
+      role: 'SUPER_ADMIN',
+      status: 'ACTIVE',
+      kycStatus: 'APPROVED',
+      mfaEnabled: true,
+      mfaSecret: 'JBSWY3DPEHPK3PXP',
       },
     ];
 
@@ -641,7 +641,7 @@ export class AuthService {
   public async validateSession(sessionToken: string): Promise<UserRecord | null> {
     if (!sessionToken) return null;
     try {
-      await this.readyPromise;
+    await this.readyPromise;
     } catch {
       // Continue even if initial background hydration had a delay
     }
@@ -902,6 +902,12 @@ export class AuthService {
 
   public getUserById(id: string): UserRecord | undefined {
     return this.usersById.get(id);
+  }
+
+  /** CUSTOMER accounts only (after auth hydration). Used by KYC admin queue completeness. */
+  public async listCustomers(): Promise<UserRecord[]> {
+    await this.readyPromise;
+    return Array.from(this.usersById.values()).filter((u) => u.role === 'CUSTOMER');
   }
 
   /** Persist a cached user row to Neon (call after mutating kycStatus/status outside AuthService). */

@@ -157,12 +157,16 @@ kycRouter.get(
   '/reviews',
   authenticate,
   requireRoles(['COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN']),
-  (req: Request, res: Response) => {
-    const profiles = defaultKycService.getAllProfilesForReview(req.user!.role);
-    res.json({
-      count: profiles.length,
-      profiles,
-    });
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const profiles = await defaultKycService.getAllProfilesForReview(req.user!.role);
+      res.json({
+        count: profiles.length,
+        profiles,
+      });
+    } catch (err) {
+      next(err);
+    }
   }
 );
 

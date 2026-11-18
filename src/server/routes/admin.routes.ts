@@ -125,7 +125,7 @@ adminRouter.get(
       const lockedUsers = usersData.users.filter((u) => u.status === 'LOCKED').length;
 
       // 2. KYC Profiles
-      const kycProfiles = defaultKycService.getAllProfilesForReview(user.role);
+      const kycProfiles = await defaultKycService.getAllProfilesForReview(user.role);
       const pendingKyc = kycProfiles.filter((p) => p.status === 'SUBMITTED' || p.status === 'UNDER_REVIEW');
       const approvedKyc = kycProfiles.filter((p) => p.status === 'APPROVED').length;
       const rejectedKyc = kycProfiles.filter((p) => p.status === 'REJECTED').length;
@@ -519,17 +519,22 @@ adminRouter.get(
   requireRoles(['COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN']),
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      await defaultAuthService.whenReady();
       await defaultKycService.whenReady();
       const { status } = req.query;
-      let profiles = defaultKycService.getAllProfilesForReview(req.user!.role);
+      let profiles = await defaultKycService.getAllProfilesForReview(req.user!.role);
 
       if (status && status !== 'ALL') {
         profiles = profiles.filter((p) => p.status === status);
       }
 
+      const enriched = await Promise.all(
+        profiles.map((profile) => defaultKycService.enrichProfileForAdmin(profile)),
+      );
+
       res.json({
-        total: profiles.length,
-        profiles,
+        total: enriched.length,
+        profiles: enriched,
       });
     } catch (err) {
       next(err);
@@ -546,11 +551,13 @@ adminRouter.get(
   '/kyc/:userId',
   authenticate,
   requireRoles(['COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN']),
-  (req: Request, res: Response, next: NextFunction): void => {
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const targetUserId = req.params.userId!;
+      await defaultAuthService.whenReady();
+      await defaultKycService.whenReady();
       const profile = defaultKycService.getOrCreateProfile(targetUserId);
-      res.json({ profile });
+      res.json({ profile: await defaultKycService.enrichProfileForAdmin(profile) });
     } catch (err) {
       next(err);
     }

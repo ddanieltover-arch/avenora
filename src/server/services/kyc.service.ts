@@ -11,7 +11,7 @@
  */
 
 import type { KycStatus as PrismaKycStatus } from '@prisma/client';
-import { KycStatus, UserRole } from './auth.service.ts';
+import { KycStatus, UserRole, type UserRecord } from './auth.service.ts';
 import { defaultAuthService } from './auth.service.ts';
 import { defaultAuditService } from './audit.service.ts';
 import { defaultDomesticBankAccountService } from './domesticBankAccount.service.ts';
@@ -421,7 +421,9 @@ export class KycService {
       const user = defaultAuthService.getUserById(userId);
       if (user?.kycStatus === 'APPROVED') {
         profile.status = 'APPROVED';
-        profile.verifiedCountryCode = user.countryCode;
+        if (user.countryCode) {
+          profile.verifiedCountryCode = user.countryCode.trim().toUpperCase();
+        }
       } else if (
         user &&
         (user.kycStatus === 'SUBMITTED' ||
@@ -430,6 +432,9 @@ export class KycService {
           user.kycStatus === 'REJECTED')
       ) {
         profile.status = user.kycStatus;
+        if (user.countryCode) {
+          profile.verifiedCountryCode = user.countryCode.trim().toUpperCase();
+        }
       }
 
       this.profilesByUserId.set(userId, profile);
@@ -700,7 +705,7 @@ export class KycService {
     });
 
     // Update user record — activate only after admin APPROVED KYC (await Neon write)
-    await this.syncUserActivationFromKycDecision(params.targetUserId, params.decision);
+    const user = await this.syncUserActivationFromKycDecision(params.targetUserId, params.decision);
 
     // Log to durable audit trail
     defaultAuditService.logAction({
@@ -798,16 +803,17 @@ export class KycService {
   private async syncUserActivationFromKycDecision(
     userId: string,
     decision: 'APPROVED' | 'REJECTED' | 'NEEDS_MORE_INFORMATION' | 'UNDER_REVIEW' | 'SUBMITTED',
-  ): Promise<void> {
+  ): Promise<UserRecord | null> {
     const user = await defaultAuthService.ensureUserById(userId);
     if (!user) {
       console.error('[kyc] cannot sync user after review; user not found:', userId);
-      return;
+      return null;
     }
     user.kycStatus = decision;
     user.updatedAt = new Date();
     defaultAuthService.syncCustomerActivationFromKyc(userId);
     await defaultAuthService.saveUser(userId);
+    return user;
   }
 
   /**
@@ -863,12 +869,60 @@ export class KycService {
     };
   }
 
-  public getAllProfilesForReview(reviewerRole: UserRole): KycProfileRecord[] {
+  private profileRecencyMs(profile: KycProfileRecord): number {
+    const raw = profile.submittedAt ?? profile.reviewedAt ?? profile.updatedAt ?? profile.createdAt;
+    const ms = new Date(raw).getTime();
+    return Number.isFinite(ms) ? ms : 0;
+  }
+
+  /**
+   * Admin KYC queue: every CUSTOMER has a profile row, sorted newest → oldest.
+   */
+  public async getAllProfilesForReview(reviewerRole: UserRole): Promise<KycProfileRecord[]> {
     const allowedRoles: UserRole[] = ['SUPPORT', 'COMPLIANCE_REVIEWER', 'ADMIN', 'SUPER_ADMIN'];
     if (!allowedRoles.includes(reviewerRole)) {
       throw new Error('Access denied.');
     }
-    return Array.from(this.profilesByUserId.values());
+    await this.readyPromise;
+    const customers = await defaultAuthService.listCustomers();
+    for (const customer of customers) {
+      this.getOrCreateProfile(customer.id);
+    }
+    return Array.from(this.profilesByUserId.values()).sort(
+      (a, b) => this.profileRecencyMs(b) - this.profileRecencyMs(a),
+    );
+  }
+
+  /** Enrich a KYC profile with auth identity for admin queue/detail UIs. */
+  public async enrichProfileForAdmin(profile: KycProfileRecord): Promise<
+    KycProfileRecord & {
+      customerFullName: string | null;
+      customerEmail: string | null;
+      displayName: string;
+      hasIdentitySubmission: boolean;
+    }
+  > {
+    const user =
+      (await defaultAuthService.ensureUserById(profile.userId)) ||
+      defaultAuthService.getUserById(profile.userId) ||
+      null;
+    const legalName = `${profile.legalFirstName ?? ''} ${profile.legalLastName ?? ''}`.trim();
+    const customerFullName = user?.fullName?.trim() || null;
+    const customerEmail = user?.email?.trim() || null;
+    const hasIdentitySubmission = Boolean(
+      legalName ||
+        profile.dateOfBirth ||
+        profile.taxIdMasked ||
+        profile.taxIdFull ||
+        (profile.documentRefs && profile.documentRefs.length > 0),
+    );
+    return {
+      ...profile,
+      customerFullName,
+      customerEmail,
+      displayName: legalName || customerFullName || profile.userId,
+      hasIdentitySubmission,
+    };
   }
 
   /**

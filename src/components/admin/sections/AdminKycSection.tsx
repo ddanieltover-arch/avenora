@@ -3,7 +3,7 @@
  * Admin control center — kyc tab section (extracted).
  */
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   RefreshCw,
 } from 'lucide-react';
@@ -31,6 +31,25 @@ function kycDocumentSideLabel(fileName?: string) {
   if (fileName.includes('_FRONT_')) return 'Front';
   if (fileName.includes('_BACK_')) return 'Back';
   return null;
+}
+
+function kycDisplayName(c: any): string {
+  const legal = `${c?.legalFirstName ?? ''} ${c?.legalLastName ?? ''}`.trim();
+  return c?.displayName || legal || c?.customerFullName || c?.userId || 'Unknown customer';
+}
+
+function kycRecencyMs(c: any): number {
+  const raw = c?.submittedAt ?? c?.reviewedAt ?? c?.updatedAt ?? c?.createdAt;
+  const ms = new Date(raw || 0).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function kycCountryLabel(c: any): string {
+  return (
+    c?.residentialAddress?.country ||
+    c?.verifiedCountryCode ||
+    '—'
+  );
 }
 
 export interface AdminKycSectionProps {
@@ -66,6 +85,11 @@ export const AdminKycSection: React.FC<AdminKycSectionProps> = ({
   setKycReason,
   handleKycReviewSubmit,
 }) => {
+  const sortedKycCases = useMemo(
+    () => [...kycCases].sort((a, b) => kycRecencyMs(b) - kycRecencyMs(a)),
+    [kycCases],
+  );
+
   return (
     <div className="space-y-6">
                 <AdminPageHeader
@@ -98,26 +122,29 @@ export const AdminKycSection: React.FC<AdminKycSectionProps> = ({
                     <AdminButton size="sm" onClick={fetchKycQueue}>Apply</AdminButton>
                   </div>
                   <span className="text-xs text-brand-muted font-medium">
-                    Total cases displayed: {kycCases.length}
+                    Total cases displayed: {sortedKycCases.length}
                   </span>
                 </AdminFilterBar>
 
                 {/* KYC Cases List */}
                 <div className="space-y-3">
-                  {kycCases.length === 0 ? (
-                    <AdminEmptyState title="No KYC cases pending review." />
+                  {sortedKycCases.length === 0 ? (
+                    <AdminEmptyState title="No KYC cases match this filter." />
                   ) : (
-                    kycCases.map((c) => {
+                    sortedKycCases.map((c) => {
                       const isSelf = user?.id === c.userId;
+                      const docs = Array.isArray(c.documentRefs) ? c.documentRefs : [];
+                      const taxType = c.taxIdType || '—';
+                      const taxMasked = c.taxIdMasked || '—';
                       return (
                         <div
                           key={c.id}
                           className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs flex flex-col md:flex-row md:items-center md:justify-between gap-4"
                         >
                           <div className="space-y-1">
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-serif font-bold text-base text-brand-deep">
-                                {c.legalFirstName} {c.legalLastName}
+                                {kycDisplayName(c)}
                               </span>
                               <AdminBadge tone={badgeToneForStatus(c.status)}>{c.status}</AdminBadge>
                               <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-600">
@@ -125,28 +152,42 @@ export const AdminKycSection: React.FC<AdminKycSectionProps> = ({
                               </span>
                             </div>
 
+                            {c.customerEmail ? (
+                              <div className="text-xs text-brand-muted">{c.customerEmail}</div>
+                            ) : null}
+
                             <div className="text-xs text-brand-muted flex flex-wrap items-center gap-3">
                               <span>User ID: <strong className="font-mono text-[11px]">{c.userId}</strong></span>
                               <span>·</span>
-                              <span>DOB: <strong>{c.dateOfBirth || 'N/A'}</strong></span>
+                              <span>DOB: <strong>{c.dateOfBirth || '—'}</strong></span>
                               <span>·</span>
-                              <span>Tax ID ({c.taxIdType}): <strong className="font-mono">{c.taxIdMasked}</strong></span>
+                              <span>Tax ID ({taxType}): <strong className="font-mono">{taxMasked}</strong></span>
                               <span>·</span>
-                              <span>Country: <strong>{c.residentialAddress?.country || 'US'}</strong></span>
+                              <span>Country: <strong>{kycCountryLabel(c)}</strong></span>
                             </div>
 
+                            {c.hasIdentitySubmission === false ? (
+                              <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1 inline-block">
+                                No KYC submission details on file
+                              </p>
+                            ) : null}
+
                             {/* Document vault references */}
-                            <div className="pt-1 flex items-center gap-2 text-[11px] text-slate-500">
+                            <div className="pt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
                               <span>Secure vault refs:</span>
-                              {c.documentRefs?.map((doc: any) => (
-                                <span
-                                  key={doc.id}
-                                  className="font-mono text-[10px] bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded border border-slate-200"
-                                  title={doc.storageRef}
-                                >
-                                  {doc.type} ({doc.storageRef?.slice(0, 24)}...)
-                                </span>
-                              ))}
+                              {docs.length === 0 ? (
+                                <span className="text-slate-400">None on file</span>
+                              ) : (
+                                docs.map((doc: any) => (
+                                  <span
+                                    key={doc.id}
+                                    className="font-mono text-[10px] bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded border border-slate-200"
+                                    title={doc.storageRef}
+                                  >
+                                    {doc.type} ({doc.storageRef?.slice(0, 24)}...)
+                                  </span>
+                                ))
+                              )}
                             </div>
                           </div>
 
@@ -172,7 +213,7 @@ export const AdminKycSection: React.FC<AdminKycSectionProps> = ({
                   <AdminModal
                     open={Boolean(selectedKycCase)}
                     onClose={() => setSelectedKycCase(null)}
-                    title={`Compliance Decision: ${selectedKycCase.legalFirstName} ${selectedKycCase.legalLastName}`}
+                    title={`Compliance Decision: ${kycDisplayName(selectedKycCase)}`}
                     size="xl"
                     footer={
                       <>
@@ -200,6 +241,14 @@ export const AdminKycSection: React.FC<AdminKycSectionProps> = ({
                               Status:{' '}
                               <strong className="text-brand-deep">{selectedKycCase.status || '—'}</strong>
                             </div>
+                            <div>
+                              Account name:{' '}
+                              <strong>{selectedKycCase.customerFullName || kycDisplayName(selectedKycCase)}</strong>
+                            </div>
+                            <div>
+                              Email:{' '}
+                              <strong>{selectedKycCase.customerEmail || '—'}</strong>
+                            </div>
                             <div>Tier: <strong>{selectedKycCase.tier ?? '—'}</strong></div>
                             <div>Version: <strong>{selectedKycCase.version ?? '—'}</strong></div>
                             <div>
@@ -221,6 +270,11 @@ export const AdminKycSection: React.FC<AdminKycSectionProps> = ({
                           <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">
                             Personal details
                           </p>
+                          {selectedKycCase.hasIdentitySubmission === false ? (
+                            <p className="mb-2 text-[11px] text-amber-800">
+                              No KYC submission details on file
+                            </p>
+                          ) : null}
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5">
                             <div>
                               Legal first name:{' '}
@@ -233,6 +287,10 @@ export const AdminKycSection: React.FC<AdminKycSectionProps> = ({
                             <div>
                               Date of birth:{' '}
                               <strong className="font-mono">{selectedKycCase.dateOfBirth || '—'}</strong>
+                            </div>
+                            <div>
+                              Country:{' '}
+                              <strong>{kycCountryLabel(selectedKycCase)}</strong>
                             </div>
                           </div>
                         </div>
