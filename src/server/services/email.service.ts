@@ -8,6 +8,7 @@
 
 import { Resend } from 'resend';
 import { getValidatedConfig } from '../../config/env.config.ts';
+import { prisma } from '../db/prisma.ts';
 import { adminInbox, contactInbox, supportInbox } from '../emails/compose.ts';
 import type { EmailPayload } from '../emails/types.ts';
 import {
@@ -32,22 +33,40 @@ export interface SendEmailParams {
   text?: string;
   replyTo?: string;
   tags?: Array<{ name: string; value: string }>;
+  /**
+   * When set, this notification is sent at most once for the key (durable via
+   * IdempotencyRecord + in-memory). Use for lifecycle emails that must not repeat.
+   */
+  dedupeKey?: string;
+  /** Burst window for identical to+subject; default 15 minutes. */
+  burstTtlMs?: number;
 }
 
 export interface SendEmailResult {
   sent: boolean;
   id?: string;
   skipped?: boolean;
+  duplicate?: boolean;
   error?: string;
 }
+
+const DEFAULT_BURST_TTL_MS = 15 * 60 * 1000;
+const ONCE_TTL_MS = 10 * 365 * 24 * 60 * 60 * 1000; // ~10 years
 
 /** Fire-and-forget helper — never throws to callers. */
 export function voidEmail(label: string, promise: Promise<SendEmailResult>): void {
   void promise.catch((err) => console.error(`[email] ${label} failed:`, err));
 }
 
+function normalizeRecipient(to: string | string[]): string {
+  const list = (Array.isArray(to) ? to : [to]).map((v) => v.trim().toLowerCase()).filter(Boolean);
+  return list.sort().join(',');
+}
+
 export class EmailService {
   private client: Resend | null = null;
+  /** In-process claim cache (also survives hot reload via module singleton). */
+  private claimedKeys = new Map<string, number>();
 
   private getConfig() {
     return getValidatedConfig();
@@ -74,9 +93,115 @@ export class EmailService {
     return `${name} <${address}>`;
   }
 
+  /**
+   * Claim a notification key. Returns false if already claimed
+   * (in-memory or durable IdempotencyRecord). Survives serverless cold starts.
+   */
+  private async claimNotificationKey(key: string, ttlMs: number): Promise<boolean> {
+    const now = Date.now();
+    const memExpires = this.claimedKeys.get(key);
+    if (memExpires && memExpires > now) {
+      return false;
+    }
+
+    const expiresAt = new Date(now + ttlMs);
+    const body = JSON.stringify({ claimedAt: new Date().toISOString() });
+
+    try {
+      const existing = await prisma.idempotencyRecord.findUnique({ where: { key } });
+      if (existing && existing.expiresAt.getTime() > now) {
+        this.claimedKeys.set(key, existing.expiresAt.getTime());
+        return false;
+      }
+
+      if (existing) {
+        await prisma.idempotencyRecord.update({
+          where: { key },
+          data: { responseCode: 202, responseBody: body, expiresAt },
+        });
+      } else {
+        await prisma.idempotencyRecord.create({
+          data: {
+            key,
+            endpoint: 'email_notification',
+            requestHash: key,
+            responseCode: 202,
+            responseBody: body,
+            expiresAt,
+          },
+        });
+      }
+    } catch (err) {
+      // Unique-constraint race or DB blip — re-check; if still active, treat as duplicate.
+      try {
+        const raced = await prisma.idempotencyRecord.findUnique({ where: { key } });
+        if (raced && raced.expiresAt.getTime() > Date.now()) {
+          this.claimedKeys.set(key, raced.expiresAt.getTime());
+          return false;
+        }
+      } catch {
+        /* ignore secondary lookup failures */
+      }
+      console.warn(
+        '[email] dedupe persist failed; using in-memory only:',
+        err instanceof Error ? err.message : err,
+      );
+      if (this.claimedKeys.get(key) && this.claimedKeys.get(key)! > Date.now()) {
+        return false;
+      }
+    }
+
+    this.claimedKeys.set(key, expiresAt.getTime());
+    return true;
+  }
+
+  private async releaseNotificationKey(key: string): Promise<void> {
+    this.claimedKeys.delete(key);
+    try {
+      await prisma.idempotencyRecord.delete({ where: { key } });
+    } catch {
+      /* already gone or DB unavailable */
+    }
+  }
+
   public async send(params: SendEmailParams): Promise<SendEmailResult> {
+    const toKey = normalizeRecipient(params.to);
+    const category = params.tags?.find((t) => t.name === 'category')?.value || 'general';
+    let onceClaimed = false;
+    let burstKey: string | null = null;
+
+    if (params.dedupeKey) {
+      onceClaimed = await this.claimNotificationKey(params.dedupeKey, ONCE_TTL_MS);
+      if (!onceClaimed) {
+        if (process.env.NODE_ENV !== 'test') {
+          console.info('[email] skipped duplicate (once):', params.dedupeKey, params.subject);
+        }
+        return { sent: false, skipped: true, duplicate: true };
+      }
+    }
+
+    // Burst guard: same recipient + subject within a short window
+    const burstTtl = params.burstTtlMs ?? DEFAULT_BURST_TTL_MS;
+    burstKey = `email:burst:${toKey}:${category}:${params.subject.trim().toLowerCase()}`;
+    const burstClaimed = await this.claimNotificationKey(burstKey, burstTtl);
+    if (!burstClaimed) {
+      if (onceClaimed && params.dedupeKey) {
+        await this.releaseNotificationKey(params.dedupeKey);
+      }
+      if (process.env.NODE_ENV !== 'test') {
+        console.info('[email] skipped duplicate (burst):', burstKey);
+      }
+      return { sent: false, skipped: true, duplicate: true };
+    }
+
     const client = this.getClient();
     if (!client) {
+      if (onceClaimed && params.dedupeKey) {
+        await this.releaseNotificationKey(params.dedupeKey);
+      }
+      if (burstKey) {
+        await this.releaseNotificationKey(burstKey);
+      }
       if (process.env.NODE_ENV !== 'test') {
         console.warn('[email] RESEND_API_KEY not configured — skipping send:', params.subject);
       }
@@ -107,12 +232,24 @@ export class EmailService {
       });
 
       if (error) {
+        if (onceClaimed && params.dedupeKey) {
+          await this.releaseNotificationKey(params.dedupeKey);
+        }
+        if (burstKey) {
+          await this.releaseNotificationKey(burstKey);
+        }
         console.error('[email] Resend API error:', error.message);
         return { sent: false, error: error.message };
       }
 
       return { sent: true, id: data?.id };
     } catch (err) {
+      if (onceClaimed && params.dedupeKey) {
+        await this.releaseNotificationKey(params.dedupeKey);
+      }
+      if (burstKey) {
+        await this.releaseNotificationKey(burstKey);
+      }
       const message = err instanceof Error ? err.message : String(err);
       console.error('[email] Failed to send:', message);
       return { sent: false, error: message };
@@ -122,7 +259,7 @@ export class EmailService {
   private async sendPayload(
     to: string | string[],
     payload: EmailPayload,
-    replyTo?: string
+    options?: { replyTo?: string; dedupeKey?: string; burstTtlMs?: number }
   ): Promise<SendEmailResult> {
     return this.send({
       to,
@@ -130,14 +267,23 @@ export class EmailService {
       html: payload.html,
       text: payload.text,
       tags: payload.tags,
-      replyTo,
+      replyTo: options?.replyTo,
+      dedupeKey: options?.dedupeKey,
+      burstTtlMs: options?.burstTtlMs,
     });
+  }
+
+  private onceKey(category: string, to: string, resourceId?: string): string {
+    const base = `email:once:${category}:${to.trim().toLowerCase()}`;
+    return resourceId ? `${base}:${resourceId}` : base;
   }
 
   // ── Welcome ──────────────────────────────────────────────────────────────
 
   public async sendWelcomeEmail(params: { to: string; fullName: string }): Promise<SendEmailResult> {
-    return this.sendPayload(params.to, buildWelcomeEmail({ fullName: params.fullName }));
+    return this.sendPayload(params.to, buildWelcomeEmail({ fullName: params.fullName }), {
+      dedupeKey: this.onceKey('welcome', params.to),
+    });
   }
 
   // ── Auth & account ───────────────────────────────────────────────────────
@@ -195,7 +341,9 @@ export class EmailService {
     to: string;
     fullName: string;
   }): Promise<SendEmailResult> {
-    return this.sendPayload(params.to, authTpl.buildMfaEnrolledEmail(params));
+    return this.sendPayload(params.to, authTpl.buildMfaEnrolledEmail(params), {
+      dedupeKey: this.onceKey('mfa_enrolled', params.to),
+    });
   }
 
   public async sendMfaDisabledEmail(params: {
@@ -232,7 +380,9 @@ export class EmailService {
     to: string;
     fullName: string;
   }): Promise<SendEmailResult> {
-    return this.sendPayload(params.to, authTpl.buildPendingVerificationEmail(params));
+    return this.sendPayload(params.to, authTpl.buildPendingVerificationEmail(params), {
+      dedupeKey: this.onceKey('pending_verification', params.to),
+    });
   }
 
   public async sendRoleChangedEmail(params: {
@@ -257,7 +407,12 @@ export class EmailService {
     fullName: string;
     reference?: string;
   }): Promise<SendEmailResult> {
-    return this.sendPayload(params.to, kycTpl.buildKycSubmittedEmail(params));
+    return this.sendPayload(params.to, kycTpl.buildKycSubmittedEmail(params), {
+      // Allow a later resubmit email, but not a burst of duplicates
+      dedupeKey: params.reference
+        ? this.onceKey('kyc_submitted', params.to, params.reference)
+        : undefined,
+    });
   }
 
   public async sendKycSubmittedStaffEmail(params: {
@@ -287,7 +442,9 @@ export class EmailService {
     to: string;
     fullName: string;
   }): Promise<SendEmailResult> {
-    return this.sendPayload(params.to, kycTpl.buildKycApprovedEmail(params));
+    return this.sendPayload(params.to, kycTpl.buildKycApprovedEmail(params), {
+      dedupeKey: this.onceKey('kyc_approved', params.to),
+    });
   }
 
   public async sendKycRejectedEmail(params: {
@@ -303,16 +460,23 @@ export class EmailService {
     fullName: string;
     accountSummary: string;
     currency?: string;
+    userId?: string;
   }): Promise<SendEmailResult> {
-    return this.sendPayload(params.to, kycTpl.buildDomesticAccountIssuedEmail(params));
+    return this.sendPayload(params.to, kycTpl.buildDomesticAccountIssuedEmail(params), {
+      dedupeKey: this.onceKey('domestic_account_issued', params.userId || params.to),
+    });
   }
 
   public async sendDomesticAccountFailedEmail(params: {
     to: string;
     fullName: string;
     reason?: string;
+    userId?: string;
   }): Promise<SendEmailResult> {
-    return this.sendPayload(params.to, kycTpl.buildDomesticAccountFailedEmail(params));
+    return this.sendPayload(params.to, kycTpl.buildDomesticAccountFailedEmail(params), {
+      dedupeKey: this.onceKey('domestic_account_failed', params.userId || params.to),
+      burstTtlMs: 60 * 60 * 1000,
+    });
   }
 
   // ── Wallet ───────────────────────────────────────────────────────────────
@@ -639,9 +803,14 @@ export class EmailService {
     const staffResult = await this.sendPayload(
       contactInbox(),
       supportTpl.buildContactStaffEmail(params),
-      params.email
+      {
+        replyTo: params.email,
+        dedupeKey: this.onceKey('contact_staff', params.email, params.reference),
+      },
     );
-    await this.sendPayload(params.email, supportTpl.buildContactAckEmail(params));
+    await this.sendPayload(params.email, supportTpl.buildContactAckEmail(params), {
+      dedupeKey: this.onceKey('contact_ack', params.email, params.reference),
+    });
     return staffResult;
   }
 
@@ -656,7 +825,10 @@ export class EmailService {
     const staffResult = await this.sendPayload(
       supportInbox(),
       supportTpl.buildSupportTicketStaffEmail(params),
-      params.customerEmail
+      {
+        replyTo: params.customerEmail,
+        dedupeKey: this.onceKey('support_ticket_staff', params.customerEmail, params.ticketId),
+      },
     );
     await this.sendPayload(
       params.customerEmail,
@@ -664,7 +836,8 @@ export class EmailService {
         fullName: params.customerName,
         ticketId: params.ticketId,
         subject: params.subject,
-      })
+      }),
+      { dedupeKey: this.onceKey('support_ticket_ack', params.customerEmail, params.ticketId) },
     );
     return staffResult;
   }

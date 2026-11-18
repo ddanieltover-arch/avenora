@@ -370,7 +370,8 @@ export class DomesticBankAccountService {
       }
       this.auditGeneration(params.userId, generated, params.correlationId);
 
-      // Customers only — staff/admin accounts do not receive domestic-account emails
+      // Customers only — staff/admin accounts do not receive domestic-account emails.
+      // EmailService dedupeKey ensures this fires at most once per user (even across regenerations).
       if (user && user.role === 'CUSTOMER') {
         const accountSummary =
           generated.formattedValue || generated.maskedValue || generated.rawValue || generated.id;
@@ -381,6 +382,7 @@ export class DomesticBankAccountService {
             fullName: user.fullName,
             accountSummary,
             currency,
+            userId: user.id,
           }),
         );
       }
@@ -403,13 +405,14 @@ export class DomesticBankAccountService {
       });
 
       const notifyUser = user ?? this.authService.getUserById(params.userId);
-      if (notifyUser) {
+      if (notifyUser && notifyUser.role === 'CUSTOMER') {
         voidEmail(
           'domestic-account-failed',
           defaultEmailService.sendDomesticAccountFailedEmail({
             to: notifyUser.email,
             fullName: notifyUser.fullName,
             reason: message,
+            userId: notifyUser.id,
           }),
         );
       }
