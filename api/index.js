@@ -5214,29 +5214,29 @@ var init_domesticBankAccount_service = __esm({
        * Generate/backfill domestic identifiers for KYC-approved users (or when bypass is explicitly enabled).
        */
       async ensurePrimaryAccountForActiveUser(params) {
-        const user = this.authService.getUserById(params.userId);
-        if (!user) return void 0;
+        const user2 = this.authService.getUserById(params.userId);
+        if (!user2) return void 0;
         const bypass = isKycBypassEnabled();
-        if (!bypass && user.kycStatus !== "APPROVED") {
+        if (!bypass && user2.kycStatus !== "APPROVED") {
           return this.getPrimaryAccountForUser(params.userId);
         }
         const { defaultKycService: defaultKycService2 } = await Promise.resolve().then(() => (init_kyc_service(), kyc_service_exports));
         const kycProfile = defaultKycService2.getOrCreateProfile(params.userId);
         if (bypass) {
           kycProfile.status = "APPROVED";
-          kycProfile.verifiedCountryCode = kycProfile.verifiedCountryCode || user.countryCode;
+          kycProfile.verifiedCountryCode = kycProfile.verifiedCountryCode || user2.countryCode;
           if (!kycProfile.residentialAddress) {
             kycProfile.residentialAddress = {
               street: "Prototype address pending KYC submission",
               city: "N/A",
               postalCode: "00000",
-              country: user.countryCode
+              country: user2.countryCode
             };
           }
-          if (user.kycStatus !== "APPROVED") {
-            user.kycStatus = "APPROVED";
-            user.updatedAt = /* @__PURE__ */ new Date();
-            defaultAuthService.saveUserSoon(user.id);
+          if (user2.kycStatus !== "APPROVED") {
+            user2.kycStatus = "APPROVED";
+            user2.updatedAt = /* @__PURE__ */ new Date();
+            defaultAuthService.saveUserSoon(user2.id);
           }
         }
         return this.ensurePrimaryAccountAfterKycApproval({
@@ -5265,21 +5265,21 @@ var init_domesticBankAccount_service = __esm({
           }
           this.accountsByUserId.delete(params.userId);
         }
-        const user = this.authService.getUserById(params.userId);
+        const user2 = this.authService.getUserById(params.userId);
         const bypass = isKycBypassEnabled();
-        if (!user || !bypass && user.kycStatus !== "APPROVED") {
+        if (!user2 || !bypass && user2.kycStatus !== "APPROVED") {
           return this.upsertPlaceholder(params.userId, {
             generationStatus: "NOT_ELIGIBLE",
-            verifiedCountryCode: user?.countryCode ?? "US",
+            verifiedCountryCode: user2?.countryCode ?? "US",
             schemeId: "FORMAT_NOT_IMPLEMENTED",
             lastError: "KYC approval required before domestic account generation."
           });
         }
         if (params.kycProfile.status !== "APPROVED") {
           params.kycProfile.status = "APPROVED";
-          params.kycProfile.verifiedCountryCode = params.kycProfile.verifiedCountryCode || params.kycProfile.residentialAddress?.country || user.countryCode;
+          params.kycProfile.verifiedCountryCode = params.kycProfile.verifiedCountryCode || params.kycProfile.residentialAddress?.country || user2.countryCode;
         }
-        const signupCountry = user.countryCode.trim().toUpperCase();
+        const signupCountry = user2.countryCode.trim().toUpperCase();
         let verifiedCountry = (params.kycProfile.verifiedCountryCode || params.kycProfile.residentialAddress?.country || signupCountry).trim().toUpperCase();
         if (bypass) {
           verifiedCountry = signupCountry;
@@ -5336,7 +5336,7 @@ var init_domesticBankAccount_service = __esm({
             identifier = await this.identifierProvider.generateIdentifier({
               countryCode: plan.delegateProviderCountry,
               type: plan.identifierType,
-              accountHolderName: userName || user.fullName,
+              accountHolderName: userName || user2.fullName,
               currency
             });
             identifier = {
@@ -5385,13 +5385,13 @@ var init_domesticBankAccount_service = __esm({
             this.pixKeyOwner.set(pixKey, params.userId);
           }
           this.auditGeneration(params.userId, generated, params.correlationId);
-          if (user) {
+          if (user2 && user2.role === "CUSTOMER") {
             const accountSummary = generated.formattedValue || generated.maskedValue || generated.rawValue || generated.id;
             voidEmail(
               "domestic-account-issued",
               defaultEmailService.sendDomesticAccountIssuedEmail({
-                to: user.email,
-                fullName: user.fullName,
+                to: user2.email,
+                fullName: user2.fullName,
                 accountSummary,
                 currency
               })
@@ -5413,7 +5413,7 @@ var init_domesticBankAccount_service = __esm({
             reason: "Domestic account generation failed",
             details: { userId: params.userId, error: message, correlationId: params.correlationId }
           });
-          const notifyUser = user ?? this.authService.getUserById(params.userId);
+          const notifyUser = user2 ?? this.authService.getUserById(params.userId);
           if (notifyUser) {
             voidEmail(
               "domestic-account-failed",
@@ -6600,12 +6600,12 @@ var init_kyc_service = __esm({
             createdAt: /* @__PURE__ */ new Date(),
             updatedAt: /* @__PURE__ */ new Date()
           };
-          const user = defaultAuthService.getUserById(userId);
-          if (user?.kycStatus === "APPROVED") {
+          const user2 = defaultAuthService.getUserById(userId);
+          if (user2?.kycStatus === "APPROVED") {
             profile.status = "APPROVED";
-            profile.verifiedCountryCode = user.countryCode;
-          } else if (user && (user.kycStatus === "SUBMITTED" || user.kycStatus === "UNDER_REVIEW" || user.kycStatus === "NEEDS_MORE_INFORMATION" || user.kycStatus === "REJECTED")) {
-            profile.status = user.kycStatus;
+            profile.verifiedCountryCode = user2.countryCode;
+          } else if (user2 && (user2.kycStatus === "SUBMITTED" || user2.kycStatus === "UNDER_REVIEW" || user2.kycStatus === "NEEDS_MORE_INFORMATION" || user2.kycStatus === "REJECTED")) {
+            profile.status = user2.kycStatus;
           }
           this.profilesByUserId.set(userId, profile);
           this.persistProfileSoon(profile);
@@ -6676,17 +6676,17 @@ var init_kyc_service = __esm({
           message: isResubmission ? "Your updated verification details and documents have been received and queued for compliance re-evaluation." : "Your verification submission has been received and queued for compliance review.",
           timestamp: /* @__PURE__ */ new Date()
         });
-        const user = defaultAuthService.getUserById(params.userId);
-        if (user) {
-          user.kycStatus = "SUBMITTED";
-          user.updatedAt = /* @__PURE__ */ new Date();
+        const user2 = defaultAuthService.getUserById(params.userId);
+        if (user2) {
+          user2.kycStatus = "SUBMITTED";
+          user2.updatedAt = /* @__PURE__ */ new Date();
           defaultAuthService.syncCustomerActivationFromKyc(params.userId);
           defaultAuthService.saveUserSoon(params.userId);
-          const customerName = `${params.legalFirstName} ${params.legalLastName}`.trim() || user.fullName;
+          const customerName = `${params.legalFirstName} ${params.legalLastName}`.trim() || user2.fullName;
           voidEmail(
             "kyc-submitted",
             defaultEmailService.sendKycSubmittedEmail({
-              to: user.email,
+              to: user2.email,
               fullName: customerName,
               reference: profile.id
             })
@@ -6695,8 +6695,8 @@ var init_kyc_service = __esm({
             "kyc-submitted-staff",
             defaultEmailService.sendKycSubmittedStaffEmail({
               customerName,
-              customerEmail: user.email,
-              userId: user.id
+              customerEmail: user2.email,
+              userId: user2.id
             })
           );
         }
@@ -6735,6 +6735,7 @@ var init_kyc_service = __esm({
           );
         }
         if (profile.status === params.decision && profile.reviewerUserId === params.reviewerUserId && (profile.reviewerNotes === params.notes || !params.notes)) {
+          await this.syncUserActivationFromKycDecision(params.targetUserId, params.decision);
           return profile;
         }
         if (profile.status === "APPROVED" && params.decision !== "APPROVED") {
@@ -6772,13 +6773,7 @@ var init_kyc_service = __esm({
           message: notifMsg,
           timestamp: /* @__PURE__ */ new Date()
         });
-        const user = defaultAuthService.getUserById(params.targetUserId);
-        if (user) {
-          user.kycStatus = params.decision;
-          user.updatedAt = /* @__PURE__ */ new Date();
-          defaultAuthService.syncCustomerActivationFromKyc(params.targetUserId);
-          defaultAuthService.saveUserSoon(params.targetUserId);
-        }
+        await this.syncUserActivationFromKycDecision(params.targetUserId, params.decision);
         defaultAuditService.logAction({
           action: "KYC_REVIEWED",
           actorUserId: params.reviewerUserId,
@@ -6861,6 +6856,21 @@ var init_kyc_service = __esm({
         }
         await this.persistProfile(profile);
         return profile;
+      }
+      /**
+       * Align AuthUser.kycStatus + account activation with a KYC review decision and
+       * await durable Neon persistence (cache-miss safe on serverless).
+       */
+      async syncUserActivationFromKycDecision(userId, decision) {
+        const user2 = await defaultAuthService.ensureUserById(userId);
+        if (!user2) {
+          console.error("[kyc] cannot sync user after review; user not found:", userId);
+          return;
+        }
+        user2.kycStatus = decision;
+        user2.updatedAt = /* @__PURE__ */ new Date();
+        defaultAuthService.syncCustomerActivationFromKyc(userId);
+        await defaultAuthService.saveUser(userId);
       }
       /**
        * Secure identity document access control.
@@ -7064,56 +7074,56 @@ var init_auth_service = __esm({
           updatedAt: row.updatedAt
         };
       }
-      cachePutUser(user) {
-        this.usersByEmail.set(user.email.toLowerCase(), user);
-        this.usersById.set(user.id, user);
+      cachePutUser(user2) {
+        this.usersByEmail.set(user2.email.toLowerCase(), user2);
+        this.usersById.set(user2.id, user2);
       }
-      async persistUserCreate(user) {
+      async persistUserCreate(user2) {
         await prisma.user.create({
           data: {
-            id: user.id,
-            email: user.email.toLowerCase(),
-            passwordHash: user.passwordHash,
-            fullName: user.fullName,
-            phoneNumber: user.phoneNumber,
-            transactionPinHash: user.transactionPinHash,
-            countryCode: user.countryCode,
-            role: user.role,
-            status: user.status,
-            kycStatus: user.kycStatus,
-            mfaEnabled: user.mfaEnabled,
-            mfaSecret: user.mfaSecret ?? null,
-            mfaRecoveryCodes: user.mfaRecoveryCodes ? JSON.stringify(user.mfaRecoveryCodes) : null,
-            failedLoginAttempts: user.failedLoginAttempts,
-            lockedUntil: user.lockedUntil ?? null,
-            createdAt: user.createdAt,
-            updatedAt: user.updatedAt
+            id: user2.id,
+            email: user2.email.toLowerCase(),
+            passwordHash: user2.passwordHash,
+            fullName: user2.fullName,
+            phoneNumber: user2.phoneNumber,
+            transactionPinHash: user2.transactionPinHash,
+            countryCode: user2.countryCode,
+            role: user2.role,
+            status: user2.status,
+            kycStatus: user2.kycStatus,
+            mfaEnabled: user2.mfaEnabled,
+            mfaSecret: user2.mfaSecret ?? null,
+            mfaRecoveryCodes: user2.mfaRecoveryCodes ? JSON.stringify(user2.mfaRecoveryCodes) : null,
+            failedLoginAttempts: user2.failedLoginAttempts,
+            lockedUntil: user2.lockedUntil ?? null,
+            createdAt: user2.createdAt,
+            updatedAt: user2.updatedAt
           }
         });
       }
-      async persistUserUpdate(user) {
-        user.updatedAt = /* @__PURE__ */ new Date();
+      async persistUserUpdate(user2) {
+        user2.updatedAt = /* @__PURE__ */ new Date();
         await prisma.user.update({
-          where: { id: user.id },
+          where: { id: user2.id },
           data: {
-            email: user.email.toLowerCase(),
-            passwordHash: user.passwordHash,
-            fullName: user.fullName,
-            phoneNumber: user.phoneNumber,
-            transactionPinHash: user.transactionPinHash,
-            countryCode: user.countryCode,
-            role: user.role,
-            status: user.status,
-            kycStatus: user.kycStatus,
-            mfaEnabled: user.mfaEnabled,
-            mfaSecret: user.mfaSecret ?? null,
-            mfaRecoveryCodes: user.mfaRecoveryCodes ? JSON.stringify(user.mfaRecoveryCodes) : null,
-            failedLoginAttempts: user.failedLoginAttempts,
-            lockedUntil: user.lockedUntil ?? null,
-            updatedAt: user.updatedAt
+            email: user2.email.toLowerCase(),
+            passwordHash: user2.passwordHash,
+            fullName: user2.fullName,
+            phoneNumber: user2.phoneNumber,
+            transactionPinHash: user2.transactionPinHash,
+            countryCode: user2.countryCode,
+            role: user2.role,
+            status: user2.status,
+            kycStatus: user2.kycStatus,
+            mfaEnabled: user2.mfaEnabled,
+            mfaSecret: user2.mfaSecret ?? null,
+            mfaRecoveryCodes: user2.mfaRecoveryCodes ? JSON.stringify(user2.mfaRecoveryCodes) : null,
+            failedLoginAttempts: user2.failedLoginAttempts,
+            lockedUntil: user2.lockedUntil ?? null,
+            updatedAt: user2.updatedAt
           }
         });
-        this.cachePutUser(user);
+        this.cachePutUser(user2);
       }
       async hydrateFromDatabase() {
         const users = await prisma.user.findMany();
@@ -7172,7 +7182,7 @@ var init_auth_service = __esm({
         }
         const passwordHash = await SecurityService.hashPassword("AvenoraPassword2026!");
         const transactionPinHash = await SecurityService.hashPassword("1234");
-        const user = this.createUserInternal({
+        const user2 = this.createUserInternal({
           id: "usr_staff_support_admin_01",
           email,
           passwordHash,
@@ -7186,7 +7196,7 @@ var init_auth_service = __esm({
           mfaEnabled: true,
           mfaSecret: "JBSWY3DPEHPK3PXP"
         });
-        await this.persistUserCreate(user);
+        await this.persistUserCreate(user2);
       }
       /**
        * Creates staff fixtures for automated tests only. Never called from the app constructor.
@@ -7263,13 +7273,13 @@ var init_auth_service = __esm({
             this.cachePutUser(this.userFromPrisma(existing));
             continue;
           }
-          const user = this.createUserInternal(entry);
-          await this.persistUserCreate(user);
+          const user2 = this.createUserInternal(entry);
+          await this.persistUserCreate(user2);
         }
       }
-      createUserInternal(user) {
+      createUserInternal(user2) {
         const fullRecord = {
-          ...user,
+          ...user2,
           failedLoginAttempts: 0,
           createdAt: /* @__PURE__ */ new Date(),
           updatedAt: /* @__PURE__ */ new Date()
@@ -7299,7 +7309,7 @@ var init_auth_service = __esm({
         const passwordHash = await SecurityService.hashPassword(params.password);
         const transactionPinHash = await SecurityService.hashPassword(params.transactionPin);
         const userId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-        const user = this.createUserInternal({
+        const user2 = this.createUserInternal({
           id: userId,
           email: emailNorm,
           passwordHash,
@@ -7315,15 +7325,15 @@ var init_auth_service = __esm({
           mfaEnabled: false
         });
         try {
-          await this.persistUserCreate(user);
+          await this.persistUserCreate(user2);
         } catch (err) {
           this.usersByEmail.delete(emailNorm);
           this.usersById.delete(userId);
           throw err;
         }
-        await defaultLedgerService.provisionCustomerAccountsDurable(userId, user.fullName, user.countryCode);
-        void defaultEmailService.sendWelcomeEmail({ to: user.email, fullName: user.fullName }).catch((err) => console.error("[auth] welcome email failed:", err));
-        return this.createSession(user, params.ipAddress, params.userAgent, {
+        await defaultLedgerService.provisionCustomerAccountsDurable(userId, user2.fullName, user2.countryCode);
+        void defaultEmailService.sendWelcomeEmail({ to: user2.email, fullName: user2.fullName }).catch((err) => console.error("[auth] welcome email failed:", err));
+        return this.createSession(user2, params.ipAddress, params.userAgent, {
           transactionPinUnlocked: true
         });
       }
@@ -7333,106 +7343,78 @@ var init_auth_service = __esm({
       async login(params) {
         await this.readyPromise;
         const emailNorm = params.email.trim().toLowerCase();
-        const user = this.usersByEmail.get(emailNorm);
+        const user2 = this.usersByEmail.get(emailNorm);
         const genericAuthError = new Error("Invalid email or password.");
-        if (!user) {
+        if (!user2) {
           await SecurityService.verifyPassword("dummy", "scrypt:salt:00");
           throw genericAuthError;
         }
-        if (user.lockedUntil && user.lockedUntil > /* @__PURE__ */ new Date()) {
-          const waitMinutes = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 6e4);
+        if (user2.lockedUntil && user2.lockedUntil > /* @__PURE__ */ new Date()) {
+          const waitMinutes = Math.ceil((user2.lockedUntil.getTime() - Date.now()) / 6e4);
           throw new Error(`Account temporarily locked due to excessive failed attempts. Please try again in ${waitMinutes} minutes.`);
         }
-        const isPasswordValid = await SecurityService.verifyPassword(params.password, user.passwordHash);
+        const isPasswordValid = await SecurityService.verifyPassword(params.password, user2.passwordHash);
         if (!isPasswordValid) {
-          user.failedLoginAttempts += 1;
-          if (user.failedLoginAttempts >= this.MAX_FAILED_ATTEMPTS) {
-            user.lockedUntil = new Date(Date.now() + this.LOCKOUT_DURATION_MS);
+          user2.failedLoginAttempts += 1;
+          if (user2.failedLoginAttempts >= this.MAX_FAILED_ATTEMPTS) {
+            user2.lockedUntil = new Date(Date.now() + this.LOCKOUT_DURATION_MS);
             voidEmail(
               "login-lockout",
               defaultEmailService.sendLoginLockoutEmail({
-                to: user.email,
-                fullName: user.fullName,
+                to: user2.email,
+                fullName: user2.fullName,
                 lockMinutes: Math.ceil(this.LOCKOUT_DURATION_MS / 6e4)
               })
             );
           }
-          await this.persistUserUpdate(user);
+          await this.persistUserUpdate(user2);
           throw genericAuthError;
         }
-        user.failedLoginAttempts = 0;
-        user.lockedUntil = void 0;
-        await this.persistUserUpdate(user);
-        if (!isKycBypassEnabled() && user.role === "CUSTOMER" && user.kycStatus === "APPROVED") {
+        user2.failedLoginAttempts = 0;
+        user2.lockedUntil = void 0;
+        await this.persistUserUpdate(user2);
+        if (!isKycBypassEnabled() && user2.role === "CUSTOMER" && user2.kycStatus === "APPROVED") {
           try {
             const { defaultKycService: defaultKycService2 } = await Promise.resolve().then(() => (init_kyc_service(), kyc_service_exports));
-            const profile = defaultKycService2.getOrCreateProfile(user.id);
+            const profile = defaultKycService2.getOrCreateProfile(user2.id);
             const bypassOnly = !profile.reviewedAt || profile.residentialAddress?.street === "Prototype address pending KYC submission";
             if (bypassOnly) {
               const restoredStatus = profile.submittedAt ? "SUBMITTED" : "NOT_STARTED";
-              user.kycStatus = restoredStatus;
+              user2.kycStatus = restoredStatus;
               profile.status = restoredStatus;
               profile.updatedAt = /* @__PURE__ */ new Date();
               const { defaultDomesticBankAccountService: defaultDomesticBankAccountService2 } = await Promise.resolve().then(() => (init_domesticBankAccount_service(), domesticBankAccount_service_exports));
-              defaultDomesticBankAccountService2.clearPrimaryAccountForUser(user.id);
-              await this.persistUserUpdate(user);
+              defaultDomesticBankAccountService2.clearPrimaryAccountForUser(user2.id);
+              await this.persistUserUpdate(user2);
             }
-            await this.syncCustomerActivationFromKycAsync(user.id);
+            await this.syncCustomerActivationFromKycAsync(user2.id);
           } catch {
           }
-        } else if (!isKycBypassEnabled() && user.role === "CUSTOMER") {
-          await this.syncCustomerActivationFromKycAsync(user.id);
+        } else if (!isKycBypassEnabled() && user2.role === "CUSTOMER") {
+          await this.syncCustomerActivationFromKycAsync(user2.id);
         }
-        if (user.mfaEnabled && user.mfaSecret) {
+        if (user2.mfaEnabled && user2.mfaSecret) {
           if (!params.totpCode && !params.recoveryCode) {
             return { requiresMfa: true };
           }
           if (params.totpCode) {
             const config = getValidatedConfig();
-            const isDemoBypass = config.PROTOTYPE_MODE && params.totpCode === "123456" && (user.email.endsWith("@avenora.internal") || user.email === "support@avenorabank.org");
-            const isTotpValid = isDemoBypass || SecurityService.verifyTotpCode(user.mfaSecret, params.totpCode);
+            const isDemoBypass = config.PROTOTYPE_MODE && params.totpCode === "123456" && (user2.email.endsWith("@avenora.internal") || user2.email === "support@avenorabank.org");
+            const isTotpValid = isDemoBypass || SecurityService.verifyTotpCode(user2.mfaSecret, params.totpCode);
             if (!isTotpValid) {
               throw new Error("Invalid MFA verification code.");
             }
           } else if (params.recoveryCode) {
             const hashedAttempt = SecurityService.hashToken(params.recoveryCode.trim().toUpperCase());
-            const codeIndex = (user.mfaRecoveryCodes || []).indexOf(hashedAttempt);
+            const codeIndex = (user2.mfaRecoveryCodes || []).indexOf(hashedAttempt);
             if (codeIndex === -1) {
               throw new Error("Invalid or already used recovery code.");
             }
-            user.mfaRecoveryCodes?.splice(codeIndex, 1);
-            await this.persistUserUpdate(user);
+            user2.mfaRecoveryCodes?.splice(codeIndex, 1);
+            await this.persistUserUpdate(user2);
           }
         }
-        const isNewDevice = !Array.from(this.sessionsByTokenHash.values()).some(
-          (s) => s.userId === user.id && s.userAgent === params.userAgent
-        );
-        const authResult = await this.createSession(user, params.ipAddress, params.userAgent);
-        const isStaffLogin = user.role === "SUPPORT" || user.role === "COMPLIANCE_REVIEWER" || user.role === "ADMIN" || user.role === "SUPER_ADMIN";
-        if (!isStaffLogin) {
-          const signedInAt = (/* @__PURE__ */ new Date()).toISOString();
-          voidEmail(
-            "login-success",
-            defaultEmailService.sendLoginSuccessEmail({
-              to: user.email,
-              fullName: user.fullName,
-              ipAddress: params.ipAddress,
-              signedInAt
-            })
-          );
-          if (isNewDevice) {
-            voidEmail(
-              "login-new-device",
-              defaultEmailService.sendLoginNewDeviceEmail({
-                to: user.email,
-                fullName: user.fullName,
-                ipAddress: params.ipAddress,
-                userAgent: params.userAgent,
-                signedInAt
-              })
-            );
-          }
-        }
+        const authResult = await this.createSession(user2, params.ipAddress, params.userAgent);
         return { requiresMfa: false, authResult };
       }
       /**
@@ -7471,12 +7453,37 @@ var init_auth_service = __esm({
         try {
           const row = await prisma.user.findUnique({ where: { id: userId } });
           if (!row) return null;
-          const user = this.userFromPrisma(row);
-          this.cachePutUser(user);
-          return user;
+          const user2 = this.userFromPrisma(row);
+          this.cachePutUser(user2);
+          return user2;
         } catch (err) {
           console.error("[auth] failed to resolve user by ID from database:", err);
           return null;
+        }
+      }
+      /** Public cache+DB user lookup for services that must not miss cold serverless instances. */
+      async ensureUserById(userId) {
+        return this.resolveUserById(userId);
+      }
+      /**
+       * Re-read mutable account activation fields from Neon so multi-instance
+       * KYC approvals are visible without waiting for a process restart.
+       */
+      async refreshAccountActivationFields(user2) {
+        try {
+          const row = await prisma.user.findUnique({
+            where: { id: user2.id },
+            select: { status: true, kycStatus: true }
+          });
+          if (!row) return;
+          if (user2.status !== row.status) {
+            user2.status = row.status;
+          }
+          if (user2.kycStatus !== row.kycStatus) {
+            user2.kycStatus = row.kycStatus;
+          }
+        } catch (err) {
+          console.error("[auth] failed to refresh account status from database:", user2.id, err);
         }
       }
       /**
@@ -7510,11 +7517,12 @@ var init_auth_service = __esm({
             data: { expiresAt: session.expiresAt, updatedAt: session.updatedAt }
           }).catch((err) => console.error("[auth] failed to extend active session:", err));
         }
-        const user = await this.resolveUserById(session.userId);
-        if (!user) {
+        const user2 = await this.resolveUserById(session.userId);
+        if (!user2) {
           return null;
         }
-        return user;
+        await this.refreshAccountActivationFields(user2);
+        return user2;
       }
       /**
        * Revokes a session (Logout).
@@ -7557,15 +7565,15 @@ var init_auth_service = __esm({
        * and dispatches it via Resend when email is configured.
        */
       async requestPasswordReset(email) {
-        const user = this.usersByEmail.get(email.trim().toLowerCase());
-        if (!user) {
+        const user2 = this.usersByEmail.get(email.trim().toLowerCase());
+        if (!user2) {
           return {};
         }
         const rawToken = SecurityService.generateSecureToken(32);
         const tokenHash = SecurityService.hashToken(rawToken);
         const record = {
           id: `prt_${Date.now()}`,
-          userId: user.id,
+          userId: user2.id,
           tokenHash,
           isUsed: false,
           expiresAt: new Date(Date.now() + this.RESET_TOKEN_TTL_MS),
@@ -7583,8 +7591,8 @@ var init_auth_service = __esm({
           }
         });
         const emailResult = await defaultEmailService.sendPasswordResetEmail({
-          to: user.email,
-          fullName: user.fullName,
+          to: user2.email,
+          fullName: user2.fullName,
           resetToken: rawToken
         });
         const config = getValidatedConfig();
@@ -7606,8 +7614,8 @@ var init_auth_service = __esm({
         if (!resetRecord || resetRecord.isUsed || resetRecord.expiresAt < /* @__PURE__ */ new Date()) {
           throw new Error("Password reset token is invalid or has expired.");
         }
-        const user = this.usersById.get(resetRecord.userId);
-        if (!user) {
+        const user2 = this.usersById.get(resetRecord.userId);
+        if (!user2) {
           throw new Error("User not found.");
         }
         resetRecord.isUsed = true;
@@ -7615,14 +7623,14 @@ var init_auth_service = __esm({
           where: { id: resetRecord.id },
           data: { isUsed: true }
         });
-        user.passwordHash = await SecurityService.hashPassword(newPassword);
-        await this.persistUserUpdate(user);
-        await this.revokeAllUserSessions(user.id);
+        user2.passwordHash = await SecurityService.hashPassword(newPassword);
+        await this.persistUserUpdate(user2);
+        await this.revokeAllUserSessions(user2.id);
         voidEmail(
           "password-reset-completed",
           defaultEmailService.sendPasswordResetCompletedEmail({
-            to: user.email,
-            fullName: user.fullName
+            to: user2.email,
+            fullName: user2.fullName
           })
         );
       }
@@ -7633,21 +7641,21 @@ var init_auth_service = __esm({
         if (newPassword.length < 8) {
           throw new Error("New password must be at least 8 characters long.");
         }
-        const user = this.usersById.get(userId);
-        if (!user) {
+        const user2 = this.usersById.get(userId);
+        if (!user2) {
           throw new Error("User not found.");
         }
-        const isValid = await SecurityService.verifyPassword(currentPassword, user.passwordHash);
+        const isValid = await SecurityService.verifyPassword(currentPassword, user2.passwordHash);
         if (!isValid) {
           throw new Error("Current password does not match.");
         }
-        user.passwordHash = await SecurityService.hashPassword(newPassword);
-        await this.persistUserUpdate(user);
+        user2.passwordHash = await SecurityService.hashPassword(newPassword);
+        await this.persistUserUpdate(user2);
         voidEmail(
           "password-changed",
           defaultEmailService.sendPasswordChangedEmail({
-            to: user.email,
-            fullName: user.fullName
+            to: user2.email,
+            fullName: user2.fullName
           })
         );
       }
@@ -7655,32 +7663,32 @@ var init_auth_service = __esm({
        * Initiates TOTP MFA enrollment: returns secret and otpauth URI.
        */
       async startMfaEnrollment(userId) {
-        const user = this.usersById.get(userId);
-        if (!user) throw new Error("User not found");
+        const user2 = this.usersById.get(userId);
+        if (!user2) throw new Error("User not found");
         const secret = SecurityService.generateTotpSecret();
-        const otpauthUri = SecurityService.generateTotpUri(user.email, secret);
+        const otpauthUri = SecurityService.generateTotpUri(user2.email, secret);
         return { secret, otpauthUri };
       }
       /**
        * Confirms TOTP MFA enrollment by validating initial 6-digit code.
        */
       async confirmMfaEnrollment(userId, secret, code) {
-        const user = this.usersById.get(userId);
-        if (!user) throw new Error("User not found");
+        const user2 = this.usersById.get(userId);
+        if (!user2) throw new Error("User not found");
         const isValid = SecurityService.verifyTotpCode(secret, code);
         if (!isValid) {
           throw new Error("Invalid verification code. Please check your authenticator clock.");
         }
         const { rawCodes, hashedCodes } = SecurityService.generateRecoveryCodes();
-        user.mfaEnabled = true;
-        user.mfaSecret = secret;
-        user.mfaRecoveryCodes = hashedCodes;
-        await this.persistUserUpdate(user);
+        user2.mfaEnabled = true;
+        user2.mfaSecret = secret;
+        user2.mfaRecoveryCodes = hashedCodes;
+        await this.persistUserUpdate(user2);
         voidEmail(
           "mfa-enrolled",
           defaultEmailService.sendMfaEnrolledEmail({
-            to: user.email,
-            fullName: user.fullName
+            to: user2.email,
+            fullName: user2.fullName
           })
         );
         return { recoveryCodes: rawCodes };
@@ -7690,9 +7698,9 @@ var init_auth_service = __esm({
       }
       /** Persist a cached user row to Neon (call after mutating kycStatus/status outside AuthService). */
       async saveUser(userId) {
-        const user = this.usersById.get(userId);
-        if (!user) return;
-        await this.persistUserUpdate(user);
+        const user2 = this.usersById.get(userId);
+        if (!user2) return;
+        await this.persistUserUpdate(user2);
       }
       saveUserSoon(userId) {
         void this.saveUser(userId).catch(
@@ -7706,47 +7714,47 @@ var init_auth_service = __esm({
        * Does not override admin SUSPENDED / LOCKED holds.
        */
       syncCustomerActivationFromKyc(userId) {
-        const user = this.usersById.get(userId);
-        if (!user || user.role !== "CUSTOMER") return void 0;
-        if (user.status === "SUSPENDED" || user.status === "LOCKED") {
-          return user.status;
+        const user2 = this.usersById.get(userId);
+        if (!user2 || user2.role !== "CUSTOMER") return void 0;
+        if (user2.status === "SUSPENDED" || user2.status === "LOCKED") {
+          return user2.status;
         }
         let changed = false;
-        if (isKycBypassEnabled() && user.kycStatus === "APPROVED") {
-          if (user.status !== "ACTIVE") {
-            user.status = "ACTIVE";
-            user.updatedAt = /* @__PURE__ */ new Date();
+        if (isKycBypassEnabled() && user2.kycStatus === "APPROVED") {
+          if (user2.status !== "ACTIVE") {
+            user2.status = "ACTIVE";
+            user2.updatedAt = /* @__PURE__ */ new Date();
             changed = true;
           }
           if (changed) {
-            void this.persistUserUpdate(user).catch(
+            void this.persistUserUpdate(user2).catch(
               (err) => console.error("[auth] failed to persist KYC activation:", err)
             );
           }
-          return user.status;
+          return user2.status;
         }
-        const prevStatus = user.status;
-        const nextStatus = user.kycStatus === "APPROVED" ? "ACTIVE" : "PENDING_VERIFICATION";
-        if (user.status !== nextStatus) {
-          user.status = nextStatus;
-          user.updatedAt = /* @__PURE__ */ new Date();
+        const prevStatus = user2.status;
+        const nextStatus = user2.kycStatus === "APPROVED" ? "ACTIVE" : "PENDING_VERIFICATION";
+        if (user2.status !== nextStatus) {
+          user2.status = nextStatus;
+          user2.updatedAt = /* @__PURE__ */ new Date();
           changed = true;
           if (nextStatus === "PENDING_VERIFICATION" && prevStatus === "ACTIVE") {
             voidEmail(
               "pending-verification",
               defaultEmailService.sendPendingVerificationEmail({
-                to: user.email,
-                fullName: user.fullName
+                to: user2.email,
+                fullName: user2.fullName
               })
             );
           }
         }
         if (changed) {
-          void this.persistUserUpdate(user).catch(
+          void this.persistUserUpdate(user2).catch(
             (err) => console.error("[auth] failed to persist KYC activation:", err)
           );
         }
-        return user.status;
+        return user2.status;
       }
       async syncCustomerActivationFromKycAsync(userId) {
         return this.syncCustomerActivationFromKyc(userId);
@@ -7759,8 +7767,8 @@ var init_auth_service = __esm({
         if (byEmail) return byEmail;
         return this.usersById.get(trimmed);
       }
-      sanitizeUser(user) {
-        const { passwordHash, transactionPinHash, mfaSecret, mfaRecoveryCodes, ...safeUser } = user;
+      sanitizeUser(user2) {
+        const { passwordHash, transactionPinHash, mfaSecret, mfaRecoveryCodes, ...safeUser } = user2;
         return safeUser;
       }
       /** Returns whether the current session has completed post-login PIN unlock. */
@@ -7786,11 +7794,11 @@ var init_auth_service = __esm({
         if (!session || session.isRevoked || session.expiresAt < /* @__PURE__ */ new Date()) {
           throw new Error("Invalid or expired session.");
         }
-        const user = await this.resolveUserById(session.userId);
-        if (!user) {
+        const user2 = await this.resolveUserById(session.userId);
+        if (!user2) {
           throw new Error("Invalid or expired session.");
         }
-        await this.assertTransactionPinForUser(user, transactionPin);
+        await this.assertTransactionPinForUser(user2, transactionPin);
         session.transactionPinUnlocked = true;
         session.updatedAt = /* @__PURE__ */ new Date();
         await prisma.session.update({
@@ -7807,49 +7815,49 @@ var init_auth_service = __esm({
         if (!/^\d{4}$/.test(transactionPin)) {
           throw new Error("Transaction PIN must be exactly 4 digits.");
         }
-        const user = await this.resolveUserById(userId);
-        if (!user) {
+        const user2 = await this.resolveUserById(userId);
+        if (!user2) {
           throw new Error("Invalid transaction PIN.");
         }
-        await this.assertTransactionPinForUser(user, transactionPin);
+        await this.assertTransactionPinForUser(user2, transactionPin);
       }
-      async assertTransactionPinForUser(user, transactionPin) {
-        if (user.lockedUntil && user.lockedUntil > /* @__PURE__ */ new Date()) {
-          const waitMinutes = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 6e4);
+      async assertTransactionPinForUser(user2, transactionPin) {
+        if (user2.lockedUntil && user2.lockedUntil > /* @__PURE__ */ new Date()) {
+          const waitMinutes = Math.ceil((user2.lockedUntil.getTime() - Date.now()) / 6e4);
           throw new Error(
             `Account temporarily locked due to excessive failed attempts. Please try again in ${waitMinutes} minutes.`
           );
         }
-        const isValid = await SecurityService.verifyPassword(transactionPin, user.transactionPinHash);
+        const isValid = await SecurityService.verifyPassword(transactionPin, user2.transactionPinHash);
         if (!isValid) {
-          user.failedLoginAttempts += 1;
-          user.updatedAt = /* @__PURE__ */ new Date();
-          if (user.failedLoginAttempts >= this.MAX_FAILED_ATTEMPTS) {
-            user.lockedUntil = new Date(Date.now() + this.LOCKOUT_DURATION_MS);
+          user2.failedLoginAttempts += 1;
+          user2.updatedAt = /* @__PURE__ */ new Date();
+          if (user2.failedLoginAttempts >= this.MAX_FAILED_ATTEMPTS) {
+            user2.lockedUntil = new Date(Date.now() + this.LOCKOUT_DURATION_MS);
             voidEmail(
               "login-lockout",
               defaultEmailService.sendLoginLockoutEmail({
-                to: user.email,
-                fullName: user.fullName,
+                to: user2.email,
+                fullName: user2.fullName,
                 lockMinutes: Math.ceil(this.LOCKOUT_DURATION_MS / 6e4)
               })
             );
           }
-          await this.persistUserUpdate(user);
+          await this.persistUserUpdate(user2);
           throw new Error("Invalid transaction PIN.");
         }
-        user.failedLoginAttempts = 0;
-        user.lockedUntil = void 0;
-        await this.persistUserUpdate(user);
+        user2.failedLoginAttempts = 0;
+        user2.lockedUntil = void 0;
+        await this.persistUserUpdate(user2);
       }
-      async createSession(user, ipAddress, userAgent, options) {
+      async createSession(user2, ipAddress, userAgent, options) {
         const rawSessionToken = SecurityService.generateSecureToken(32);
         const tokenHash = SecurityService.hashToken(rawSessionToken);
         const expiresAt = new Date(Date.now() + this.SESSION_TTL_MS);
         const transactionPinUnlocked = options?.transactionPinUnlocked === true;
         const session = {
           id: `ses_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-          userId: user.id,
+          userId: user2.id,
           tokenHash,
           ipAddress,
           userAgent,
@@ -7875,7 +7883,7 @@ var init_auth_service = __esm({
         });
         this.sessionsByTokenHash.set(tokenHash, session);
         return {
-          user: this.sanitizeUser(user),
+          user: this.sanitizeUser(user2),
           sessionToken: rawSessionToken,
           expiresAt,
           transactionPinUnlocked
@@ -8206,8 +8214,8 @@ function maskSensitiveData(data) {
   if (typeof data !== "object") {
     if (typeof data === "string") {
       if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data)) {
-        const [user, domain] = data.split("@");
-        return `${(user ?? "").slice(0, 1)}***@${domain}`;
+        const [user2, domain] = data.split("@");
+        return `${(user2 ?? "").slice(0, 1)}***@${domain}`;
       }
     }
     return data;
@@ -9485,8 +9493,8 @@ async function authenticate(req, res, next) {
     });
     return;
   }
-  const user = await defaultAuthService.validateSession(token);
-  if (!user) {
+  const user2 = await defaultAuthService.validateSession(token);
+  if (!user2) {
     res.status(401).json({
       type: "https://avenora.com/errors/invalid-session",
       title: "Invalid or Expired Session",
@@ -9497,7 +9505,7 @@ async function authenticate(req, res, next) {
     });
     return;
   }
-  req.user = user;
+  req.user = user2;
   req.sessionToken = token;
   next();
 }
@@ -12483,14 +12491,14 @@ var WalletService = class {
     return { direction: "DEBIT", withdrawal };
   }
   resolveRecipientWallet(query) {
-    const user = defaultAuthService.resolveUserByEmailOrId(query);
-    if (!user) {
+    const user2 = defaultAuthService.resolveUserByEmailOrId(query);
+    if (!user2) {
       throw new Error("Recipient not found. Use a registered customer email or user ID.");
     }
-    if (user.role !== "CUSTOMER") {
+    if (user2.role !== "CUSTOMER") {
       throw new Error("Internal transfers are only supported between customer accounts.");
     }
-    return this.getOrCreateUserWallet(user.id, user.fullName, user.countryCode);
+    return this.getOrCreateUserWallet(user2.id, user2.fullName, user2.countryCode);
   }
   checkIdempotency(key, userId, endpoint, payload) {
     const existing = this.idempotencyStore.get(key);
@@ -14042,10 +14050,10 @@ loanRouter.post("/amortization-calculator", (req, res, next) => {
 });
 loanRouter.get("/applications", authenticate, (req, res, next) => {
   try {
-    const user = req.user;
+    const user2 = req.user;
     const showAll = req.query.all === "true";
-    if (showAll && ["COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"].includes(user.role)) {
-      const allApps = defaultLoanService.getAllApplicationsForReview(user.role);
+    if (showAll && ["COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"].includes(user2.role)) {
+      const allApps = defaultLoanService.getAllApplicationsForReview(user2.role);
       res.json({
         total: allApps.length,
         view: "compliance_officer_queue",
@@ -14053,7 +14061,7 @@ loanRouter.get("/applications", authenticate, (req, res, next) => {
       });
       return;
     }
-    const userApps = defaultLoanService.getUserApplications(user.id);
+    const userApps = defaultLoanService.getUserApplications(user2.id);
     res.json({
       total: userApps.length,
       view: "customer_applications",
@@ -14065,7 +14073,7 @@ loanRouter.get("/applications", authenticate, (req, res, next) => {
 });
 loanRouter.get("/applications/:id", authenticate, (req, res, next) => {
   try {
-    const user = req.user;
+    const user2 = req.user;
     const appId = req.params.id;
     const app = defaultLoanService.getApplicationById(appId);
     if (!app) {
@@ -14077,8 +14085,8 @@ loanRouter.get("/applications/:id", authenticate, (req, res, next) => {
       });
       return;
     }
-    const isStaff = ["COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"].includes(user.role);
-    if (app.userId !== user.id && !isStaff) {
+    const isStaff = ["COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"].includes(user2.role);
+    if (app.userId !== user2.id && !isStaff) {
       res.status(403).json({
         type: "https://avenora.com/errors/access-denied",
         title: "Access Denied",
@@ -14094,11 +14102,11 @@ loanRouter.get("/applications/:id", authenticate, (req, res, next) => {
 });
 loanRouter.post("/applications", authenticate, (req, res, next) => {
   try {
-    const user = req.user;
+    const user2 = req.user;
     const validated = CreateLoanSchema.parse(req.body);
     const app = defaultLoanService.createDraftApplication({
-      userId: user.id,
-      applicantName: user.fullName,
+      userId: user2.id,
+      applicantName: user2.fullName,
       type: validated.type,
       currency: validated.currency,
       requestedAmountDecimal: validated.requestedAmountDecimal,
@@ -14111,7 +14119,7 @@ loanRouter.post("/applications", authenticate, (req, res, next) => {
       consentAcknowledged: validated.consentAcknowledged
     });
     if (validated.autoSubmit) {
-      const submitted = defaultLoanService.submitApplication(app.id, user.id);
+      const submitted = defaultLoanService.submitApplication(app.id, user2.id);
       res.status(201).json({
         status: "submitted",
         application: submitted
@@ -14128,9 +14136,9 @@ loanRouter.post("/applications", authenticate, (req, res, next) => {
 });
 loanRouter.post("/applications/:id/submit", authenticate, requireTransactionEligible, (req, res, next) => {
   try {
-    const user = req.user;
+    const user2 = req.user;
     const appId = req.params.id;
-    const submitted = defaultLoanService.submitApplication(appId, user.id);
+    const submitted = defaultLoanService.submitApplication(appId, user2.id);
     res.json({
       status: "submitted",
       application: submitted
@@ -14141,9 +14149,9 @@ loanRouter.post("/applications/:id/submit", authenticate, requireTransactionElig
 });
 loanRouter.post("/applications/:id/cancel", authenticate, requireTransactionEligible, (req, res, next) => {
   try {
-    const user = req.user;
+    const user2 = req.user;
     const appId = req.params.id;
-    const cancelled = defaultLoanService.cancelApplication(appId, user.id);
+    const cancelled = defaultLoanService.cancelApplication(appId, user2.id);
     res.json({
       status: "cancelled",
       application: cancelled
@@ -14697,10 +14705,10 @@ grantRouter.post(
 );
 grantRouter.get("/applications", authenticate, (req, res, next) => {
   try {
-    const user = req.user;
+    const user2 = req.user;
     const showAll = req.query.all === "true";
-    if (showAll && ["COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"].includes(user.role)) {
-      const allApps = defaultGrantService.getAllApplicationsForReview(user.role);
+    if (showAll && ["COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"].includes(user2.role)) {
+      const allApps = defaultGrantService.getAllApplicationsForReview(user2.role);
       res.json({
         total: allApps.length,
         view: "compliance_officer_queue",
@@ -14708,7 +14716,7 @@ grantRouter.get("/applications", authenticate, (req, res, next) => {
       });
       return;
     }
-    const userApps = defaultGrantService.getUserApplications(user.id);
+    const userApps = defaultGrantService.getUserApplications(user2.id);
     res.json({
       total: userApps.length,
       view: "customer_applications",
@@ -14720,7 +14728,7 @@ grantRouter.get("/applications", authenticate, (req, res, next) => {
 });
 grantRouter.get("/applications/:id", authenticate, (req, res, next) => {
   try {
-    const user = req.user;
+    const user2 = req.user;
     const appId = req.params.id;
     const app = defaultGrantService.getApplicationById(appId);
     if (!app) {
@@ -14732,8 +14740,8 @@ grantRouter.get("/applications/:id", authenticate, (req, res, next) => {
       });
       return;
     }
-    const isStaff = ["COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"].includes(user.role);
-    if (app.userId !== user.id && !isStaff) {
+    const isStaff = ["COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"].includes(user2.role);
+    if (app.userId !== user2.id && !isStaff) {
       res.status(403).json({
         type: "https://avenora.com/errors/access-denied",
         title: "Access Denied",
@@ -14749,12 +14757,12 @@ grantRouter.get("/applications/:id", authenticate, (req, res, next) => {
 });
 grantRouter.post("/applications", authenticate, (req, res, next) => {
   try {
-    const user = req.user;
+    const user2 = req.user;
     const validated = CreateGrantAppSchema.parse(req.body);
     const app = defaultGrantService.createApplication({
       programId: validated.programId,
-      userId: user.id,
-      applicantName: user.fullName,
+      userId: user2.id,
+      applicantName: user2.fullName,
       projectTitle: validated.projectTitle,
       projectSummary: validated.projectSummary,
       requestedAmountDecimal: validated.requestedAmountDecimal,
@@ -14762,7 +14770,7 @@ grantRouter.post("/applications", authenticate, (req, res, next) => {
       documentRefs: validated.documentRefs
     });
     if (validated.autoSubmit) {
-      const submitted = defaultGrantService.submitApplication(app.id, user.id);
+      const submitted = defaultGrantService.submitApplication(app.id, user2.id);
       res.status(201).json({
         status: "submitted",
         application: submitted
@@ -14779,9 +14787,9 @@ grantRouter.post("/applications", authenticate, (req, res, next) => {
 });
 grantRouter.post("/applications/:id/submit", authenticate, requireTransactionEligible, (req, res, next) => {
   try {
-    const user = req.user;
+    const user2 = req.user;
     const appId = req.params.id;
-    const submitted = defaultGrantService.submitApplication(appId, user.id);
+    const submitted = defaultGrantService.submitApplication(appId, user2.id);
     res.json({
       status: "submitted",
       application: submitted
@@ -14986,8 +14994,8 @@ var CardService = class {
     const { full, masked, lastFour } = this.generateSyntheticPan();
     const type = params.type || "DEBIT";
     const form = params.form || "VIRTUAL";
-    const user = defaultAuthService.getUserById(params.userId);
-    const countryCode = (params.countryCode || user?.countryCode || "").toUpperCase();
+    const user2 = defaultAuthService.getUserById(params.userId);
+    const countryCode = (params.countryCode || user2?.countryCode || "").toUpperCase();
     const fixedLimits = resolveFixedCardSpendLimits({ currency, countryCode });
     const dailyLimit = Money.fromDecimalString(fixedLimits.monthlyLimitDecimal, currency);
     const singleLimit = Money.fromDecimalString(fixedLimits.singleTxLimitDecimal, currency);
@@ -15645,8 +15653,8 @@ var SimulateAuthSchema = import_zod11.z.object({
 });
 cardRouter.get("/", authenticate, (req, res, next) => {
   try {
-    const user = req.user;
-    const cards = defaultCardService.getUserCards(user.id).map((c) => defaultCardService.sanitizeCardForCustomer(c));
+    const user2 = req.user;
+    const cards = defaultCardService.getUserCards(user2.id).map((c) => defaultCardService.sanitizeCardForCustomer(c));
     res.json({
       total: cards.length,
       cards
@@ -15657,7 +15665,7 @@ cardRouter.get("/", authenticate, (req, res, next) => {
 });
 cardRouter.get("/:id", authenticate, (req, res, next) => {
   try {
-    const user = req.user;
+    const user2 = req.user;
     const cardId = req.params.id;
     const card = defaultCardService.getCardById(cardId);
     if (!card) {
@@ -15669,8 +15677,8 @@ cardRouter.get("/:id", authenticate, (req, res, next) => {
       });
       return;
     }
-    const isStaff = ["SUPPORT", "COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"].includes(user.role);
-    if (card.userId !== user.id && !isStaff) {
+    const isStaff = ["SUPPORT", "COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"].includes(user2.role);
+    if (card.userId !== user2.id && !isStaff) {
       res.status(403).json({
         type: "https://avenora.com/errors/access-denied",
         title: "Access Denied",
@@ -15679,7 +15687,7 @@ cardRouter.get("/:id", authenticate, (req, res, next) => {
       });
       return;
     }
-    const payload = card.userId === user.id && !isStaff ? defaultCardService.sanitizeCardForCustomer(card) : card;
+    const payload = card.userId === user2.id && !isStaff ? defaultCardService.sanitizeCardForCustomer(card) : card;
     res.json({ card: payload });
   } catch (err) {
     next(err);
@@ -15687,15 +15695,15 @@ cardRouter.get("/:id", authenticate, (req, res, next) => {
 });
 cardRouter.post("/request", authenticate, requireTransactionEligible, (req, res, next) => {
   try {
-    const user = req.user;
+    const user2 = req.user;
     const validated = RequestCardSchema.parse(req.body);
     const card = defaultCardService.requestCard({
-      userId: user.id,
-      cardholderName: validated.cardholderName || user.fullName,
+      userId: user2.id,
+      cardholderName: validated.cardholderName || user2.fullName,
       currency: validated.currency,
       type: validated.type,
       form: validated.form,
-      countryCode: user.countryCode,
+      countryCode: user2.countryCode,
       dailyLimitDecimal: validated.dailyLimitDecimal,
       singleTxLimitDecimal: validated.singleTxLimitDecimal
     });
@@ -15710,13 +15718,13 @@ cardRouter.post("/request", authenticate, requireTransactionEligible, (req, res,
 });
 cardRouter.patch("/:id/status", authenticate, requireTransactionEligible, (req, res, next) => {
   try {
-    const user = req.user;
+    const user2 = req.user;
     const cardId = req.params.id;
     const validated = UpdateStatusSchema.parse(req.body);
     const updated = defaultCardService.updateCardStatus({
       cardId,
-      actorUserId: user.id,
-      actorRole: user.role,
+      actorUserId: user2.id,
+      actorRole: user2.role,
       newStatus: validated.status,
       reason: validated.reason
     });
@@ -15730,12 +15738,12 @@ cardRouter.patch("/:id/status", authenticate, requireTransactionEligible, (req, 
 });
 cardRouter.patch("/:id/limits", authenticate, requireTransactionEligible, (req, res, next) => {
   try {
-    const user = req.user;
+    const user2 = req.user;
     const cardId = req.params.id;
     const validated = UpdateLimitsSchema.parse(req.body);
     const updated = defaultCardService.updateLimits({
       cardId,
-      userId: user.id,
+      userId: user2.id,
       dailyLimitDecimal: validated.dailyLimitDecimal,
       singleTxLimitDecimal: validated.singleTxLimitDecimal
     });
@@ -15770,11 +15778,11 @@ cardRouter.post("/:id/simulate-auth", authenticate, requireTransactionEligible, 
 });
 cardRouter.post("/authorizations/:authId/settle", authenticate, requireTransactionEligible, async (req, res, next) => {
   try {
-    const user = req.user;
+    const user2 = req.user;
     const authId = req.params.authId;
     const result = await defaultCardService.simulateSettlement({
       authorizationId: authId,
-      actorUserId: user.id
+      actorUserId: user2.id
     });
     res.json({
       status: "settled_cleared",
@@ -15787,12 +15795,12 @@ cardRouter.post("/authorizations/:authId/settle", authenticate, requireTransacti
 });
 cardRouter.post("/authorizations/:authId/release", authenticate, requireTransactionEligible, async (req, res, next) => {
   try {
-    const user = req.user;
+    const user2 = req.user;
     const authId = req.params.authId;
     const reason = req.body?.reason ? String(req.body.reason) : "Customer or merchant requested hold release";
     const result = await defaultCardService.simulateReleaseOrReversal({
       authorizationId: authId,
-      actorUserId: user.id,
+      actorUserId: user2.id,
       reason
     });
     res.json({
@@ -16361,11 +16369,11 @@ adminRouter.get(
   requireRoles(["SUPPORT", "COMPLIANCE_REVIEWER", "ADMIN", "SUPER_ADMIN"]),
   async (req, res, next) => {
     try {
-      const user = req.user;
+      const user2 = req.user;
       await defaultKycService.whenReady();
       await defaultWalletService.ensurePendingQueuesReady();
       const usersData = await defaultAuthService.getAllUsersForAdmin({
-        actorRole: user.role,
+        actorRole: user2.role,
         roleFilter: "CUSTOMER",
         limit: 1e3
       });
@@ -16373,7 +16381,7 @@ adminRouter.get(
       const activeUsers = usersData.users.filter((u) => u.status === "ACTIVE").length;
       const suspendedUsers = usersData.users.filter((u) => u.status === "SUSPENDED").length;
       const lockedUsers = usersData.users.filter((u) => u.status === "LOCKED").length;
-      const kycProfiles = defaultKycService.getAllProfilesForReview(user.role);
+      const kycProfiles = defaultKycService.getAllProfilesForReview(user2.role);
       const pendingKyc = kycProfiles.filter((p) => p.status === "SUBMITTED" || p.status === "UNDER_REVIEW");
       const approvedKyc = kycProfiles.filter((p) => p.status === "APPROVED").length;
       const rejectedKyc = kycProfiles.filter((p) => p.status === "REJECTED").length;
@@ -16390,16 +16398,16 @@ adminRouter.get(
         else if (ageHours <= 72) kycAging.oneToThreeDays++;
         else kycAging.overThreeDays++;
       }
-      const allLoans = defaultLoanService.getAllApplicationsForReview(user.role);
+      const allLoans = defaultLoanService.getAllApplicationsForReview(user2.role);
       const pendingLoans = allLoans.filter((l) => l.status === "SUBMITTED" || l.status === "UNDER_REVIEW").length;
       const approvedLoans = allLoans.filter((l) => l.status === "APPROVED_FOR_DEMO").length;
       const declinedLoans = allLoans.filter((l) => l.status === "DECLINED_FOR_DEMO").length;
-      const allGrants = defaultGrantService.getAllApplicationsForReview(user.role);
+      const allGrants = defaultGrantService.getAllApplicationsForReview(user2.role);
       const pendingGrants = allGrants.filter(
         (g) => g.status === "SUBMITTED" || g.status === "UNDER_REVIEW" || g.status === "ELIGIBLE_FOR_REVIEW"
       ).length;
       const disbursedGrants = allGrants.filter((g) => g.award?.disbursementStatus === "DISBURSED_SIMULATED").length;
-      const cardsData = defaultCardService.getAllCardsForAdmin({ actorRole: user.role, limit: 1e3 });
+      const cardsData = defaultCardService.getAllCardsForAdmin({ actorRole: user2.role, limit: 1e3 });
       const totalCards = cardsData.total;
       const activeCards = cardsData.cards.filter((c) => c.status === "ACTIVE_SIMULATED").length;
       const frozenCards = cardsData.cards.filter((c) => c.status === "FROZEN").length;
@@ -16407,9 +16415,9 @@ adminRouter.get(
       const pendingCardIssuance = cardsData.cards.filter(
         (c) => c.status === "PENDING_REVIEW" || c.status === "REQUESTED"
       ).length;
-      const pendingDepositQueue = defaultWalletService.getPendingDepositsForAdmin({ actorRole: user.role });
-      const pendingWithdrawalQueue = defaultWalletService.getPendingWithdrawalsForAdmin({ actorRole: user.role });
-      const txData = defaultWalletService.getAllTransactionsForAdmin({ actorRole: user.role, limit: 1e3 });
+      const pendingDepositQueue = defaultWalletService.getPendingDepositsForAdmin({ actorRole: user2.role });
+      const pendingWithdrawalQueue = defaultWalletService.getPendingWithdrawalsForAdmin({ actorRole: user2.role });
+      const txData = defaultWalletService.getAllTransactionsForAdmin({ actorRole: user2.role, limit: 1e3 });
       const totalTransactions = txData.total;
       const reversedTransactions = txData.transactions.filter((t) => t.status === "REVERSED").length;
       const ledgerSummary = defaultLedgerService.getLedgerSummary();
@@ -16420,7 +16428,7 @@ adminRouter.get(
       const auditCount = defaultAuditService.getRecentCount();
       res.json({
         metricsGeneratedAt: (/* @__PURE__ */ new Date()).toISOString(),
-        actorRole: user.role,
+        actorRole: user2.role,
         environment: "production-oriented",
         customers: {
           total: totalUsers,
@@ -16527,8 +16535,8 @@ adminRouter.get(
   async (req, res, next) => {
     try {
       const customerId = req.params.id;
-      const user = defaultAuthService.getUserById(customerId);
-      if (!user || user.role !== "CUSTOMER") {
+      const user2 = defaultAuthService.getUserById(customerId);
+      if (!user2 || user2.role !== "CUSTOMER") {
         res.status(404).json({
           type: "https://avenora.com/errors/not-found",
           title: "Customer Not Found",
@@ -16537,7 +16545,7 @@ adminRouter.get(
         });
         return;
       }
-      const safeUser = defaultAuthService.sanitizeUser(user);
+      const safeUser = defaultAuthService.sanitizeUser(user2);
       const kycProfile = defaultKycService.getOrCreateProfile(customerId);
       const wallet = defaultWalletService.getOrCreateUserWallet(customerId);
       const ledgerAccounts = defaultLedgerService.getUserAccounts(customerId);
@@ -17721,13 +17729,13 @@ init_CountryBankingRegistry();
 var domesticBankAccountRouter = (0, import_express12.Router)();
 domesticBankAccountRouter.get("/me", authenticate, async (req, res, next) => {
   try {
-    const user = req.user;
-    let record = defaultDomesticBankAccountService.getPrimaryAccountForUser(user.id);
+    const user2 = req.user;
+    let record = defaultDomesticBankAccountService.getPrimaryAccountForUser(user2.id);
     record = await defaultDomesticBankAccountService.ensurePrimaryAccountForActiveUser({
-      userId: user.id,
-      correlationId: `domestic_me_${user.id}`
+      userId: user2.id,
+      correlationId: `domestic_me_${user2.id}`
     });
-    const kycStatus = defaultAuthService.getUserById(user.id)?.kycStatus ?? user.kycStatus;
+    const kycStatus = defaultAuthService.getUserById(user2.id)?.kycStatus ?? user2.kycStatus;
     if (!record) {
       res.json({
         generationStatus: "NOT_ELIGIBLE",
@@ -17736,7 +17744,7 @@ domesticBankAccountRouter.get("/me", authenticate, async (req, res, next) => {
       });
       return;
     }
-    if (record.userId !== user.id) {
+    if (record.userId !== user2.id) {
       res.status(403).json({ error: "Access denied." });
       return;
     }
@@ -17820,9 +17828,9 @@ async function attachUserIfPresent(req) {
     token = req.cookies["avenora_session"];
   }
   if (!token) return;
-  const user = await defaultAuthService.validateSession(token);
-  if (user) {
-    req.user = user;
+  const user2 = await defaultAuthService.validateSession(token);
+  if (user2) {
+    req.user = user2;
     req.sessionToken = token;
   }
 }

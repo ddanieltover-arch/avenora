@@ -640,6 +640,9 @@ export class KycService {
       profile.reviewerUserId === params.reviewerUserId &&
       (profile.reviewerNotes === params.notes || !params.notes)
     ) {
+      // Still heal AuthUser activation — prior reviews may have approved the
+      // profile without persisting status/kycStatus on the user row.
+      await this.syncUserActivationFromKycDecision(params.targetUserId, params.decision);
       return profile;
     }
 
@@ -696,14 +699,8 @@ export class KycService {
       timestamp: new Date(),
     });
 
-    // Update user record — activate only after admin APPROVED KYC
-    const user = defaultAuthService.getUserById(params.targetUserId);
-    if (user) {
-      user.kycStatus = params.decision;
-      user.updatedAt = new Date();
-      defaultAuthService.syncCustomerActivationFromKyc(params.targetUserId);
-      defaultAuthService.saveUserSoon(params.targetUserId);
-    }
+    // Update user record — activate only after admin APPROVED KYC (await Neon write)
+    await this.syncUserActivationFromKycDecision(params.targetUserId, params.decision);
 
     // Log to durable audit trail
     defaultAuditService.logAction({
@@ -792,6 +789,25 @@ export class KycService {
 
     await this.persistProfile(profile);
     return profile;
+  }
+
+  /**
+   * Align AuthUser.kycStatus + account activation with a KYC review decision and
+   * await durable Neon persistence (cache-miss safe on serverless).
+   */
+  private async syncUserActivationFromKycDecision(
+    userId: string,
+    decision: 'APPROVED' | 'REJECTED' | 'NEEDS_MORE_INFORMATION' | 'UNDER_REVIEW' | 'SUBMITTED',
+  ): Promise<void> {
+    const user = await defaultAuthService.ensureUserById(userId);
+    if (!user) {
+      console.error('[kyc] cannot sync user after review; user not found:', userId);
+      return;
+    }
+    user.kycStatus = decision;
+    user.updatedAt = new Date();
+    defaultAuthService.syncCustomerActivationFromKyc(userId);
+    await defaultAuthService.saveUser(userId);
   }
 
   /**
